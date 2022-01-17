@@ -33,7 +33,7 @@ file_paths = sorted(file_paths)
 total_files = len(file_paths)
 print("Total Files: ", total_files)
 
-file_loc = '/mnt/raid0_24TB/rpaudel42/NCR/InnerGraph/'
+file_loc = '/mnt/raid0_24TB/isaiah/data/nested_optc/'
 
 # Make this a callable so we can parallelize
 def load_group(fid, file_path, total):
@@ -105,7 +105,7 @@ def load_group(fid, file_path, total):
                 feature_vector = [pid, ppid, key, value, image_path]
 
             if is_row_selected == True:
-                with open(file_loc + file_name, "a") as fa:
+                with open(file_loc + file_name, "a+") as fa:
                     parsed_row = [row['timestamp'], row['object'], row['action'], feature_vector]
                     writer = csv.writer(fa)
                     writer.writerow(parsed_row)
