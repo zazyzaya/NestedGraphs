@@ -16,7 +16,14 @@ from joblib import Parallel, delayed
 JOBS=16
 
 # mappings
-feats = {
+field_map = {
+    'ts' : 0,
+    'object': 1, 
+    'action': 2, 
+    'features': 3
+}
+
+feat_map = {
     'THREAD': {
         'src_pid': 0, 
         'src_tid': 1,
