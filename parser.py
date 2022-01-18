@@ -15,6 +15,36 @@ from joblib import Parallel, delayed
 # globals
 JOBS=16
 
+# mappings
+feats = {
+    'THREAD': {
+        'src_pid': 0, 
+        'src_tid': 1,
+        'tgt_pid': 2, 
+        'tgt_tid': 3
+    },
+    'FILE': {
+        'pid': 0,
+        'ppid': 1, 
+        'file_path': 2, 
+        'image_path': 3, 
+        'new_path': 4
+    },
+    'PROCESS': {
+        'pid': 0,
+        'ppid': 1, 
+        'image_path': 2,
+        'parent_image_path': 3 
+    },
+    'REGISTRY': {
+        'pid': 0,
+        'ppid': 1, 
+        'key': 2, 
+        'value': 3, 
+        'image_path': 4
+    }
+}
+
 # Grab files we want
 eval_23sept = glob.glob("/mnt/raid0_24TB/datasets/NCR2/ecar/evaluation/23Sep*/*/*.json*")
 file_paths = []
