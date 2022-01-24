@@ -49,6 +49,12 @@ feat_map = {
         'key': 2, 
         'value': 3, 
         'image_path': 4
+    },
+    'MODULE': {
+        'pid': 0,
+        'ppid': 1, 
+        'image_path': 2,
+        'module_path': 3
     }
 }
 
@@ -140,6 +146,21 @@ def load_group(fid, file_path, total):
                 else:
                     image_path = None
                 feature_vector = [pid, ppid, key, value, image_path]
+
+            if row['object'] == 'MODULE':
+                is_row_selected = True
+                file_name = row['hostname'].split('.')[0].lower()+'.csv'
+                pid = row['pid']
+                ppid = row['ppid']
+                if 'image_path' in row['properties']:
+                    image_path = row['properties']['image_path']
+                else:
+                    image_path = None
+                if 'module_path' in row['properties']:
+                    module_path = row['properties']['module_path']
+                else:
+                    module_path = None
+                feature_vector = [pid, ppid, image_path, module_path]
 
             if is_row_selected == True:
                 with open(file_loc + file_name, "a+") as fa:
