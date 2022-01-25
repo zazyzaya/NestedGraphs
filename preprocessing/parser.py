@@ -7,7 +7,7 @@ import numpy as np
 import glob
 import re
 import gzip
-import pickle
+import pickle as pkl
 import ipaddress
 import csv
 from joblib import Parallel, delayed
@@ -58,6 +58,27 @@ feat_map = {
     }
 }
 
+# Grab files we want
+eval_23sept = glob.glob("/mnt/raid0_24TB/datasets/NCR2/ecar/evaluation/23Sep*/*/*.json*")
+file_paths = []
+
+for f in eval_23sept:
+    file_paths.append(f)
+
+
+def atoi(text):
+    return int(text) if text.isdigit() else text
+
+
+def natural_keys(text):
+    return [atoi(c) for c in re.split(r'(\d+)', text)]
+
+
+file_paths.sort(key=natural_keys)
+file_paths = sorted(file_paths)
+total_files = len(file_paths)
+print("Total Files: ", total_files)
+
 
 def is_ipv4(string):
     try:
@@ -94,23 +115,75 @@ def is_valid_ip(ip_addr):
             return True
     return False
 
-# Grab files we want
-eval_23sept = glob.glob("/mnt/raid0_24TB/datasets/NCR2/ecar/evaluation/23Sep*/*/*.json*")
-file_paths = []
 
-for f in eval_23sept:
-    file_paths.append(f)
+def ip2host_map(file_paths):
+    ip2host = {}
+    for path in file_paths:
+        with gzip.open(path, 'rb') as f:
+            for line in f:
+                row = json.loads(line.decode().strip())
+                if row['object'] == 'FLOW':
+                    properties = row['properties']
 
-def atoi(text):
-    return int(text) if text.isdigit() else text
+                    if properties['direction'] == 'inbound':
+                        if 'dest_ip' in properties:
+                            dest_ip = properties['dest_ip']
+                            if is_valid_ip(dest_ip):
+                                if dest_ip not in ip2host:
+                                    ip2host[dest_ip] = row['hostname']
+                                # else:
+                                #     if row['hostname'] != ip2host[dest_ip]:
+                                #         print("Duplicate")
+                                #         print("dest_ip :", dest_ip)
+                                #         print(row)
 
-def natural_keys(text):
-    return [ atoi(c) for c in re.split(r'(\d+)', text) ]
+                    if properties['direction'] == 'outbound':
+                        if 'src_ip' in properties:
+                            src_ip = properties['src_ip']
+                            if is_valid_ip(src_ip):
+                                if src_ip not in ip2host:
+                                    ip2host[src_ip] = row['hostname']
 
-file_paths.sort(key=natural_keys)
-file_paths = sorted(file_paths)
-total_files = len(file_paths)
-print("Total Files: ", total_files)
+
+def parse_flow(file_paths, ip2host):
+    print("Total Host: ", len(list(ip2host.keys())))
+    file_name = '/mnt/raid0_24TB/isaiah/data/nested_optc/23sept_flow.csv'
+    for path in file_paths:
+        with gzip.open(path, 'rb') as f:
+            for line in tqdm(f):
+                row = json.loads(line.decode().strip())
+                if row['object'] == 'FLOW':
+                    is_row_selected = False
+                    properties = row['properties']
+                    pid = row['pid']
+                    ppid = row['ppid']
+                    if 'image_path' in properties:
+                        image_path = properties['image_path']
+                    else:
+                        image_path = None
+
+                    if properties['direction'] == 'inbound':
+                        if 'src_ip' in properties:
+                            src_ip = properties['src_ip']
+                            if is_valid_ip(src_ip) and src_ip in ip2host:
+                                src = ip2host[src_ip]
+                                dest = row['hostname']
+                                feature_vector = [pid, ppid, image_path]
+                                is_row_selected = True
+
+                    if properties['direction'] == 'outbound':
+                        if 'dest_ip' in properties:
+                            dest_ip = properties['dest_ip']
+                            if is_valid_ip(dest_ip) and dest_ip in ip2host:
+                                src = row['hostname']
+                                dest = ip2host[dest_ip]
+                                is_row_selected = True
+
+                    if is_row_selected == True:
+                        with open(file_name, "a+") as fa:
+                            host2host_flow = [row['timestamp'], src, dest, [pid, ppid, image_path]]
+                            writer = csv.writer(fa)
+                            writer.writerow(host2host_flow)
 
 file_loc = '/mnt/raid0_24TB/isaiah/data/nested_optc/'
 
@@ -206,6 +279,16 @@ def load_group(fid, file_path, total):
 
 if __name__ == '__main__':
     # Load in all paths in parallel
-    Parallel(n_jobs=JOBS, prefer='processes')(
-        delayed(load_group)(fid, path, total_files) for fid,path in enumerate(file_paths)
-    )
+    # Parallel(n_jobs=JOBS, prefer='processes')(
+    #     delayed(load_group)(fid, path, total_files) for fid,path in enumerate(file_paths)
+    # )
+
+    ip2host = ip2host_map(file_paths)
+    with open('ip2host.pkl', 'wb') as f:
+        pkl.dump(ip2host, f)
+    #
+    # with open("ip2host.pkl", "rb") as f:
+    #     ip2host = pkl.load(f)
+
+    parse_flow(file_paths, ip2host)
+
