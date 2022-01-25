@@ -284,10 +284,10 @@ if __name__ == '__main__':
     # )
 
     ip2host = ip2host_map(file_paths)
-    with open('ip2host.pkl', 'wb') as f:
+    with open(file_loc + 'ip2host.pkl', 'wb') as f:
         pkl.dump(ip2host, f)
     #
-    # with open("ip2host.pkl", "rb") as f:
+    # with open(file_loc + "ip2host.pkl", "rb") as f:
     #     ip2host = pkl.load(f)
 
     parse_flow(file_paths, ip2host)
