@@ -58,6 +58,42 @@ feat_map = {
     }
 }
 
+
+def is_ipv4(string):
+    try:
+        ipaddress.IPv4Network(string)
+        return True
+    except ValueError:
+        return False
+
+
+def is_multicast(ip_addr):
+    if int(ip_addr.split('.')[0]) >= 224:
+        return True
+    else:
+        return False
+
+
+def is_broadcast(ip_addr):
+    if '.255' in ip_addr:
+        return True
+    else:
+        return False
+
+
+def is_localhost(ip_addr):
+    if int(ip_addr.split('.')[0]) == 127:
+        return True
+    else:
+        return False
+
+
+def is_valid_ip(ip_addr):
+    if is_ipv4(ip_addr):
+        if is_multicast(ip_addr) == False and is_broadcast(ip_addr) == False and is_localhost(ip_addr) == False:
+            return True
+    return False
+
 # Grab files we want
 eval_23sept = glob.glob("/mnt/raid0_24TB/datasets/NCR2/ecar/evaluation/23Sep*/*/*.json*")
 file_paths = []
