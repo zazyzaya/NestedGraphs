@@ -62,8 +62,8 @@ class Node():
 
 
 class HostGraph(Data):
-    def __init__(self, gid, x=None, y=None, pos=None, normal=None, face=None, **kwargs):
-        super().__init__(x, None, None, y, pos, normal, face, **kwargs)
+    def __init__(self, gid, **kwargs):
+        super().__init__(**kwargs)
         
         # Unique identifier
         self.gid = gid 
@@ -106,11 +106,14 @@ class HostGraph(Data):
     
     # Add features to nodes
     def add_file(self, ts, pid, file):
-        self.nodes[self.node_map[pid]].add_file(ts, file)
+        if pid in self.node_map:
+            self.nodes[self.node_map[pid]].add_file(ts, file)
     def add_reg(self, ts, pid, reg):
-        self.nodes[self.node_map[pid]].add_reg(ts, reg)
+        if pid in self.node_map:
+            self.nodes[self.node_map[pid]].add_reg(ts, reg)
     def add_mod(self, ts, pid, mod):
-        self.nodes[self.node_map[pid]].add_mod(ts, mod)
+        if pid in self.node_map:
+            self.nodes[self.node_map[pid]].add_mod(ts, mod)
 
     
     def finalize(self):

@@ -35,35 +35,35 @@ def str_to_tensor(s: str) -> torch.Tensor:
 # Functions for the graph builder #
 # # # # # # # # # # # # # # # # # #
  
-def proc_feats(path: str, depth: int, delimeter: str='\\') -> torch.Tensor:
+def proc_feats(path: str, depth: int) -> torch.Tensor:
     '''
     Alias for path_to_tensor
     '''
-    return path_to_tensor(path, depth, delimeter)
+    return path_to_tensor(path, depth)
 
-def mod_feats(path: str, depth: int, delimeter: str='\\') -> torch.Tensor:
+def mod_feats(path: str, depth: int) -> torch.Tensor:
     '''
     Alias for path_to_tensor
     '''
-    return path_to_tensor(path, depth, delimeter)
+    return path_to_tensor(path, depth)
 
 file_acts = ['CREATE','DELETE','MODIFY','READ','RENAME','WRITE']
 FILE_ACTIONS = {k:v for v,k in enumerate(file_acts)}
-def file_feats(path: str, action: str, depth: int, delimeter: str='\\') -> torch.Tensor:
+def file_feats(path: str, action: str, depth: int) -> torch.Tensor:
     '''
     Also includes action type in the encoding
     '''
-    path = str_to_tensor(path, depth, delimeter)
-    action = torch.zeros((len(FILE_ACTIONS),1))
-    action[FILE_ACTIONS[action]]=1
+    path = path_to_tensor(path, depth)
+    action_t = torch.zeros((1, len(FILE_ACTIONS)))
+    action_t[0][FILE_ACTIONS[action]]=1
     
     # Return path encoding and one-hot of how it was accessed
-    return torch.cat([path,action], dim=1)
+    return torch.cat([path,action_t], dim=1)
 
 
 reg_acts = ['ADD', 'EDIT', 'REMOVE']
 REG_ACTIONS = {k:v for v,k in enumerate(reg_acts)}
-def reg_feats(path: str, action: str, depth: int, reverse_depth: int, delimeter: str='\\') -> torch.Tensor:
+def reg_feats(path: str, action: str, depth: int) -> torch.Tensor:
     '''
     With registries, it seems like the deeper parts of the path contain more
     information than the early parts. So this is like path_to_tensor, but backwards.
@@ -77,16 +77,16 @@ def reg_feats(path: str, action: str, depth: int, reverse_depth: int, delimeter:
         hash(DynamicInfo)
     ]
     '''
-    levels = path.lower().rsplit(delimeter, depth)  # Trim off trailing \\
+    levels = path.lower().rsplit('\\', depth)  # Trim off trailing \\
     levels = levels + ['']*(depth-len(levels))      # pad with empty entries if needed (NOTE: hash('') == 0)
     path = torch.cat([
         str_to_tensor(s) for s in levels
     ], dim=0).unsqueeze(0)
 
-    action = torch.zeros((len(REG_ACTIONS),1))
-    action[REG_ACTIONS[action]]=1
+    action_t = torch.zeros((1, len(REG_ACTIONS)))
+    action_t[0][REG_ACTIONS[action]]=1
     
-    return torch.cat([path,action], dim=1)
+    return torch.cat([path,action_t], dim=1)
 
 
 if __name__ == '__main__': 

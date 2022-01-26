@@ -3,12 +3,12 @@ from joblib import Parallel, delayed
 
 from tqdm import tqdm
 
-from hasher import proc_feats, file_feats, reg_feats, mod_feats 
-from datastructures import HostGraph
+from .hasher import proc_feats, file_feats, reg_feats, mod_feats 
+from .datastructures import HostGraph
 
 # Globals 
 JOBS = 16
-SOURCE = '/mnt/raid0_24TB/datasets/NCR2/nested_optc/hosts'
+SOURCE = '/mnt/raid0_24TB/datasets/NCR2/nested_optc/hosts/'
 
 # Hyper parameters
 PROC_DEPTH = 8
@@ -29,22 +29,24 @@ def parse_line(graph: HostGraph, line: str) -> None:
     '''
     fields = line.split(',', 3)
     ts, obj, act = fields[:3]
-    feats = fields[3].replace('"','').split(',')
+    feats = fields[3][2:-3].split(',')
+
+    ts = fmt_ts(ts)
 
     if obj == 'PROCESS':
         # For now just add process.create events
         if act != 'CREATE':
             return 
 
-        pid, ppid, path = feats[:-1]
+        pid, ppid, path = feats[:3]
         graph.add_edge(ts, pid, ppid, proc_feats(path, PROC_DEPTH))
 
     elif obj == 'FILE':
-        pid, ppid, path = feats[:-1]
+        pid, ppid, path = feats[:3]
         graph.add_file(ts, pid, file_feats(path, act, FILE_DEPTH))
 
     elif obj == 'REGISTRY': 
-        pid, ppid, key = feats[:-2]
+        pid, ppid, key = feats[:3]
         graph.add_reg(ts, pid, reg_feats(key, act, REG_DEPTH))
 
     elif obj == 'MODULE': 
@@ -62,7 +64,7 @@ def build_graph(host: int) -> HostGraph:
         while(line):
             parse_line(g, line)
             line = f.readline()
-            tqdm.update()
+            prog.update()
 
     g.finalize() 
     return g
