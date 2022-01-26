@@ -62,8 +62,11 @@ class Node():
 
 
 class HostGraph(Data):
-    def __init__(self, x=None, y=None, pos=None, normal=None, face=None, **kwargs):
+    def __init__(self, gid, x=None, y=None, pos=None, normal=None, face=None, **kwargs):
         super().__init__(x, None, None, y, pos, normal, face, **kwargs)
+        
+        # Unique identifier
+        self.gid = gid 
 
         # Will be filled and converted to tensors eventually
         self.src, self.dst = [],[] # To be converted to edge_index
@@ -75,7 +78,11 @@ class HostGraph(Data):
         self.num_nodes = 0
         self.nodes = []
 
+        # Turns graph write-only after everything is built
+        self.ready = False
+
     def add_node(self, ts, pid, feat):
+        assert not self.ready, 'add_node undefined after self.finalize() has been called'
         if pid in self.node_map:
             return 
 
@@ -87,6 +94,7 @@ class HostGraph(Data):
         self.num_nodes += 1
 
     def add_edge(self, ts, pid, ppid, feat):
+        assert not self.ready, 'add_edge undefined after self.finalize() has been called'
         # This process will be a root, since it's parent has unobserved feats
         if ppid not in self.node_map:
             self.add_node(ts, pid, feat)
@@ -110,6 +118,11 @@ class HostGraph(Data):
         Convert all lists being constructed during processing
         into tensors to be used in later processing
         '''
+        # Preserve idempotence
+        if self.ready:
+            return 
+
+        self.ready = True 
         self.edge_index = torch.tensor([self.src, self.dst])
         self.x = torch.cat(self.x, dim=0)
         self.edge_attr = torch.tensor(self.edge_attr)

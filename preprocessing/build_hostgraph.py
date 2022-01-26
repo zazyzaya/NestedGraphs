@@ -1,8 +1,14 @@
 from dateutil.parser import isoparse
+from joblib import Parallel, delayed
 
-from parser import field_map, feat_map
+from tqdm import tqdm
+
 from hasher import proc_feats, file_feats, reg_feats, mod_feats 
 from datastructures import HostGraph
+
+# Globals 
+JOBS = 16
+SOURCE = '/mnt/raid0_24TB/datasets/NCR2/nested_optc/hosts'
 
 # Hyper parameters
 PROC_DEPTH = 8
@@ -31,8 +37,41 @@ def parse_line(graph: HostGraph, line: str) -> None:
             return 
 
         pid, ppid, path = feats[:-1]
-        graph.add_edge(ts, pid, ppid, proc_feats(path, ))
+        graph.add_edge(ts, pid, ppid, proc_feats(path, PROC_DEPTH))
 
     elif obj == 'FILE':
         pid, ppid, path = feats[:-1]
-        graph.add_file(ts, pid, file_feats(path, act, ))
+        graph.add_file(ts, pid, file_feats(path, act, FILE_DEPTH))
+
+    elif obj == 'REGISTRY': 
+        pid, ppid, key = feats[:-2]
+        graph.add_reg(ts, pid, reg_feats(key, act, REG_DEPTH))
+
+    elif obj == 'MODULE': 
+        pid, ppid, _, mod = feats 
+        graph.add_mod(ts, pid, mod_feats(mod, MOD_DEPTH))
+
+
+def build_graph(host: int) -> HostGraph:
+    g = HostGraph(host)
+    prog = tqdm(desc='Lines parsed')
+    
+    with open(SOURCE+'sysclient%04d.csv' % host) as f:
+        line = f.readline()
+
+        while(line):
+            parse_line(g, line)
+            line = f.readline()
+            tqdm.update()
+
+    g.finalize() 
+    return g
+    
+
+def build_graphs(hosts):
+    '''
+    Given a sequence of hosts, build graphs for them in parallel
+    '''
+    return Parallel(n_jobs=JOBS, prefer='processes')(
+        delayed(build_graph)(h) for h in hosts
+    )
