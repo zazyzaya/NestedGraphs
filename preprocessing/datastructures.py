@@ -6,10 +6,16 @@ class DynamicFeatures():
         self.feats = [] 
         self.times = []
 
+    def __len__(self):
+        self.defrag()
+        return self.feats[0].size(0)
+
     # Avoid stacking tensors every time
     def get_data(self, time=0):
-        self.defrag()
+        if len(self.feats) == 0:
+            return torch.tensor([]), torch.tensor([])
 
+        self.defrag()
         if not time:
             return self.feats[0], self.times[0]
         
@@ -20,13 +26,18 @@ class DynamicFeatures():
     # Just mainitain a list until accessed
     def add_data(self, time: float, feat: torch.Tensor) -> None:
         self.feats.append(feat)
-        self.times.append(torch.tensor([[time]]))
+        self.times.append(torch.tensor(time))
 
     # Make sure all tensors are stacked
     def defrag(self):
         if len(self.feats) > 1:
-            self.feats = [torch.cat(self.feats, dim=0)]
-            self.times = [torch.cat(self.times, dim=0)]
+            # If this is not the first defrag
+            if self.feats[0].dim() == 2:
+                self.feats = [torch.cat([self.feats[0], torch.stack(self.feats[1:])], dim=0)]
+                self.times = [torch.cat([self.times[0], torch.stack(self.times[1:])], dim=0)]
+            else: 
+                self.feats = [torch.stack(self.feats)]
+                self.times = [torch.stack(self.times)]
 
 
 class Node():
@@ -37,6 +48,9 @@ class Node():
         self.files = DynamicFeatures()
         self.regs = DynamicFeatures()
         self.mods = DynamicFeatures()
+
+    def __len__(self):
+        return len(self.files), len(self.regs), len(self.mods)
 
     # Getters
     def get_files(self, time=0):
@@ -61,49 +75,31 @@ class Node():
         self.mods.defrag()
 
 
-class HostGraph(Data):
-    def __init__(self, gid, **kwargs):
-        super().__init__(**kwargs)
-        
-        # Unique identifier
-        self.gid = gid 
-
-        # Will be filled and converted to tensors eventually
-        self.src, self.dst = [],[] # To be converted to edge_index
-        self.edge_attr = []
-        self.x = []
-
+class NodeList():
+    '''
+    Object holding dynamic nodes (no edges)
+    '''
+    def __init__(self):
         # Give procs unique IDs starting at 0
         self.node_map = dict() 
         self.num_nodes = 0
         self.nodes = []
 
-        # Turns graph write-only after everything is built
-        self.ready = False
+    def __getitem__(self, idx):
+        if type(idx) == int:
+            return self.nodes[idx]
+        else:
+            return self.nodes[self.node_map[idx]]
 
-    def add_node(self, ts, pid, feat):
-        assert not self.ready, 'add_node undefined after self.finalize() has been called'
+    def add_node(self, ts, pid):
         if pid in self.node_map:
-            return 
+            return False
 
         self.node_map[pid] = self.num_nodes 
-        
-        self.x.append(feat)
         self.nodes.append(Node(self.num_nodes, ts))
-
         self.num_nodes += 1
+        return True
 
-    def add_edge(self, ts, pid, ppid, feat):
-        assert not self.ready, 'add_edge undefined after self.finalize() has been called'
-        # This process will be a root, since it's parent has unobserved feats
-        if ppid not in self.node_map:
-            self.add_node(ts, pid, feat)
-        else: 
-            self.add_node(ts, pid, feat)
-            self.src.append(self.node_map[ppid])
-            self.dst.append(self.node_map[pid])
-            self.edge_attr.append(ts)
-    
     # Add features to nodes
     def add_file(self, ts, pid, file):
         if pid in self.node_map:
@@ -114,6 +110,41 @@ class HostGraph(Data):
     def add_mod(self, ts, pid, mod):
         if pid in self.node_map:
             self.nodes[self.node_map[pid]].add_mod(ts, mod)
+
+    def finalize(self):
+        [n.finalize() for n in self.nodes]
+
+
+class HostGraph(Data):
+    def __init__(self, gid, **kwargs):
+        super().__init__(**kwargs)
+        '''
+        Object holding only edges, and intransient node features
+        '''
+        # Unique identifier
+        self.gid = gid 
+
+        # Will be filled and converted to tensors eventually
+        self.src, self.dst = [],[] # To be converted to edge_index
+        self.edge_attr = []
+        self.x = []
+
+        # Turns graph write-only after everything is built
+        self.ready = False
+
+    def add_node(self, ts, pid, feat, nodelist):
+        assert not self.ready, 'add_node undefined after self.finalize() has been called'
+        if nodelist.add_node(ts, pid):
+            self.x.append(feat)
+
+    def add_edge(self, ts, pid, ppid, feat, pfeat, nodelist):
+        assert not self.ready, 'add_edge undefined after self.finalize() has been called'
+         
+        self.add_node(ts, ppid, pfeat, nodelist)
+        self.add_node(ts, pid, feat, nodelist)
+        self.src.append(nodelist.node_map[ppid])
+        self.dst.append(nodelist.node_map[pid])
+        self.edge_attr.append(ts)
 
     
     def finalize(self):

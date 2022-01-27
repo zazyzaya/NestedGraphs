@@ -1,7 +1,7 @@
 import numpy as np
 import torch 
 
-def path_to_tensor(path: str, depth: int, delimeter: str='\\') -> torch.Tensor:
+def path_to_tensor(path: str, depth: int, delimeter: str='\\\\') -> torch.Tensor:
     '''
     Takes a file path and creates a tensor composed of `depth` hashes. 
     E.g. path_to_tensor('C:\\x\\y\\z\\abcd.txt', 3) returns
@@ -16,9 +16,9 @@ def path_to_tensor(path: str, depth: int, delimeter: str='\\') -> torch.Tensor:
     levels = levels + ['']*(depth-len(levels))        # pad with empty entries if needed (NOTE: hash('') == 0)
     return torch.cat([
         str_to_tensor(s) for s in levels
-    ], dim=0).unsqueeze(0)
+    ], dim=0)
 
-def str_to_tensor(s: str) -> torch.Tensor:
+def str_to_tensor(s: str, dim: int=4) -> torch.Tensor:
     '''
     Converts a string to a tensor (dim always 8 for now.. unsure
     how to update this)
@@ -27,8 +27,9 @@ def str_to_tensor(s: str) -> torch.Tensor:
         Args: 
             s (str): string to be hashed
     '''
+    assert dim <= 8 and dim >=1, 'Dimension must be in range (0,8]'
     b = abs(hash(s)).to_bytes(8, 'big')
-    return torch.frombuffer(b, dtype=torch.int8) / 128
+    return torch.frombuffer(b, dtype=torch.int8)[:dim] / 128
 
 
 # # # # # # # # # # # # # # # # # # 
@@ -54,11 +55,11 @@ def file_feats(path: str, action: str, depth: int) -> torch.Tensor:
     Also includes action type in the encoding
     '''
     path = path_to_tensor(path, depth)
-    action_t = torch.zeros((1, len(FILE_ACTIONS)))
-    action_t[0][FILE_ACTIONS[action]]=1
+    action_t = torch.zeros(len(FILE_ACTIONS))
+    action_t[FILE_ACTIONS[action]]=1
     
     # Return path encoding and one-hot of how it was accessed
-    return torch.cat([path,action_t], dim=1)
+    return torch.cat([path,action_t], dim=0)
 
 
 reg_acts = ['ADD', 'EDIT', 'REMOVE']
@@ -77,16 +78,17 @@ def reg_feats(path: str, action: str, depth: int) -> torch.Tensor:
         hash(DynamicInfo)
     ]
     '''
-    levels = path.lower().rsplit('\\', depth)  # Trim off trailing \\
+    levels = path.lower().rsplit('\\\\', depth-1)  # Trim off trailing \\
     levels = levels + ['']*(depth-len(levels))      # pad with empty entries if needed (NOTE: hash('') == 0)
+
     path = torch.cat([
         str_to_tensor(s) for s in levels
-    ], dim=0).unsqueeze(0)
+    ], dim=0)
 
-    action_t = torch.zeros((1, len(REG_ACTIONS)))
-    action_t[0][REG_ACTIONS[action]]=1
+    action_t = torch.zeros(len(REG_ACTIONS))
+    action_t[REG_ACTIONS[action]]=1
     
-    return torch.cat([path,action_t], dim=1)
+    return torch.cat([path,action_t], dim=0)
 
 
 if __name__ == '__main__': 
