@@ -43,5 +43,5 @@ class NodeRNN(nn.Module):
         
     def forward(self, x, ts, h0=None):
         times = self.t2v(ts)
-        x = self.rnn(torch.cat([times, x], dim=1))
+        x = self.rnn(torch.cat([times, x], dim=1), h0)
         return self.linear(x)
