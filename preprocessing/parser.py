@@ -120,6 +120,90 @@ def is_valid_ip(ip_addr):
             return True
     return False
 
+
+def is_anomalous_log(row):
+    host = row['hostname'].split('.')[0].lower()
+    pid = int(row['pid'])
+    timestamp = row['timestamp']
+    if host == 'sysclient0201' and (pid == 5452 or pid == 2952) and (
+            timestamp >= '2019-09-23T11:22:29.00-04:00' and timestamp <= '2019-09-23T13:27:29.00-04:00'):
+        return True
+    # Another case for 201 that remove registry persistance at 15:30
+    if host == 'sysclient0201' and (pid == 5452 or pid == 2952) and (
+            timestamp >= '2019-09-23T15:29:00.00-04:00' and timestamp <= '2019-09-23T15:32:00.00-04:00'):
+        return True
+
+    if host == 'sysclient0402' and pid == 3168 and (
+            timestamp >= '2019-09-23T13:25:00.00-04:00' and timestamp <= '2019-09-23T13:36:00.00-04:00'):
+        return True
+
+    if host == 'sysclient0660' and pid == 880 and (
+            timestamp >= '2019-09-23T13:38:00.00-04:00' and timestamp <= '2019-09-23T14:07:00.00-04:00'):
+        return True
+
+    if host == 'dc1' and pid == 1852 and (
+            timestamp >= '2019-09-23T14:04:00.00-04:00' and timestamp <= '2019-09-23T15:30:00.00-04:00'):
+        return True
+
+    if host == 'sysclient0104' and pid == 3160 and (
+            timestamp >= '2019-09-23T14:44:00.00-04:00' and timestamp <= '2019-09-23T15:30:00.00-04:00'):
+        return True
+
+    if host == 'sysclient0205' and pid == 5012 and (
+            timestamp >= '2019-09-23T14:44:00.00-04:00' and timestamp <= '2019-09-23T15:30:00.00-04:00'):
+        return True
+
+    if host == 'sysclient0321' and pid == 2980 and (
+            timestamp >= '2019-09-23T14:44:00.00-04:00' and timestamp <= '2019-09-23T15:30:00.00-04:00'):
+        return True
+
+    if host == 'sysclient0255' and pid == 3472 and (
+            timestamp >= '2019-09-23T14:44:00.00-04:00' and timestamp <= '2019-09-23T15:30:00.00-04:00'):
+        return True
+
+    if host == 'sysclient0355' and pid == 1884 and (
+            timestamp >= '2019-09-23T14:44:00.00-04:00' and timestamp <= '2019-09-23T15:30:00.00-04:00'):
+        return True
+
+    if host == 'sysclient0503' and pid == 1472 and (
+            timestamp >= '2019-09-23T14:44:00.00-04:00' and timestamp <= '2019-09-23T15:30:00.00-04:00'):
+        return True
+
+    if host == 'sysclient0462' and pid == 2536 and (
+            timestamp >= '2019-09-23T14:44:00.00-04:00' and timestamp <= '2019-09-23T15:30:00.00-04:00'):
+        return True
+
+    if host == 'sysclient0559' and pid == 1400 and (
+            timestamp >= '2019-09-23T14:44:00.00-04:00' and timestamp <= '2019-09-23T15:30:00.00-04:00'):
+        return True
+
+    if host == 'sysclient0419' and pid == 1700 and (
+            timestamp >= '2019-09-23T14:44:00.00-04:00' and timestamp <= '2019-09-23T15:30:00.00-04:00'):
+        return True
+
+    if host == 'sysclient0609' and pid == 3460 and (
+            timestamp >= '2019-09-23T14:44:00.00-04:00' and timestamp <= '2019-09-23T15:30:00.00-04:00'):
+        return True
+
+    if host == 'sysclient0771' and pid == 4244 and (
+            timestamp >= '2019-09-23T14:44:00.00-04:00' and timestamp <= '2019-09-23T15:30:00.00-04:00'):
+        return True
+
+    if host == 'sysclient0955' and pid == 4760 and (
+            timestamp >= '2019-09-23T14:44:00.00-04:00' and timestamp <= '2019-09-23T15:30:00.00-04:00'):
+        return True
+
+    if host == 'sysclient0874' and pid == 5224 and (
+            timestamp >= '2019-09-23T14:44:00.00-04:00' and timestamp <= '2019-09-23T15:30:00.00-04:00'):
+        return True
+
+    if host == 'sysclient0170' and pid == 644 and (
+            timestamp >= '2019-09-23T14:44:00.00-04:00' and timestamp <= '2019-09-23T15:30:00.00-04:00'):
+        return True
+
+    return False
+
+
 fmt_ts = lambda x : isoparse(x).timestamp()
 
 def ip2host_map(file_paths):
@@ -206,8 +290,9 @@ def parse_flow(file_paths, ip2host):
                                 is_row_selected = True
 
                     if is_row_selected == True:
+                        is_anomaly = is_anomalous_log(row)
                         with open(file_name, "a+") as fa:
-                            host2host_flow = [row['timestamp'], src, dest, [pid, ppid, image_path]]
+                            host2host_flow = [row['timestamp'], src, dest, [pid, ppid, image_path], is_anomaly]
                             writer = csv.writer(fa)
                             writer.writerow(host2host_flow)
 
@@ -254,7 +339,7 @@ def load_group(fid, file_path, total):
     with gzip.open(file_path, 'rb') as f:
         for line in tqdm(f, desc='%d/%d' % (fid, total)):
             is_row_selected = False
-            row = json.loads(line.decode().strip()) 
+            row = json.loads(line.decode().strip())
             if row['object'] == 'THREAD':
                 is_row_selected = True
                 file_name = row['hostname'].split('.')[0].lower()+'.csv'
@@ -334,8 +419,9 @@ def load_group(fid, file_path, total):
                 feature_vector = [pid, ppid, image_path, module_path]
 
             if is_row_selected == True:
+                is_anomaly = is_anomalous_log(row)
                 with open(HOME + file_name, "a+") as fa:
-                    parsed_row = [row['timestamp'], row['object'], row['action'], feature_vector]
+                    parsed_row = [row['timestamp'], row['object'], row['action'], feature_vector, is_anomaly]
                     writer = csv.writer(fa)
                     writer.writerow(parsed_row)
 
