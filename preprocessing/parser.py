@@ -419,7 +419,7 @@ def load_group(fid, file_path, total):
                 feature_vector = [pid, ppid, image_path, module_path]
 
             if is_row_selected == True:
-                is_anomaly = is_anomalous_log(row)
+                is_anomaly = 1 if is_anomalous_log(row) else 0
                 with open(HOME + file_name, "a+") as fa:
                     parsed_row = [row['timestamp'], row['object'], row['action'], feature_vector, is_anomaly]
                     writer = csv.writer(fa)
@@ -427,10 +427,11 @@ def load_group(fid, file_path, total):
 
 if __name__ == '__main__':
     # Load in all paths in parallel
-    # Parallel(n_jobs=JOBS, prefer='processes')(
-    #     delayed(load_group)(fid, path, total_files) for fid,path in enumerate(file_paths)
-    # )
+    Parallel(n_jobs=JOBS, prefer='processes')(
+        delayed(load_group)(fid, path, total_files) for fid,path in enumerate(file_paths)
+    )
 
+    '''
     if os.path.exists(IP_MAP):
         f = open(IP_MAP, 'rb')
         ip2host = pkl.load(f)
@@ -440,4 +441,4 @@ if __name__ == '__main__':
 
     parse_flow(file_paths, ip2host)
     reduce_flows()
-
+    '''
