@@ -72,6 +72,8 @@ def build_graph(host: int):
             line = f.readline()
             prog.update()
 
+    prog.close()
+
     print("Finalizing graph")
     g.finalize() 
     print("Finalizing nodes")
