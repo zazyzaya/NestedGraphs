@@ -1,5 +1,6 @@
 import torch 
 from torch import nn 
+from torch_geometric.nn import GATConv
 
 from .utils import packed_cat, repack
 
@@ -48,8 +49,33 @@ class NodeRNN(nn.Module):
     def forward(self, ts, x, h0=None):
         assert x.data.size(0) == ts.data.size(0), \
             '''ts and x must have the same batch size. 
-            Got ts: %s\tx%s''' % (str(ts.data.size()), str(x.data.size()))
+            Got ts: %s\tx: %s''' % (str(ts.data.size()), str(x.data.size()))
 
         times = self.t2v(ts)
         x = self.rnn(packed_cat([times, x], dim=1), h0)[1]
         return self.linear(x)
+
+
+class NodeEmbedder(nn.Module):
+    def __init__(self, f_feats, m_feats, r_feats, hidden, out, embed_size):
+        super().__init__() 
+
+        self.f_rnn = NodeRNN(f_feats, hidden, out)
+        self.m_rnn = NodeRNN(m_feats, hidden, out)
+        self.r_rnn = NodeRNN(r_feats, hidden, out)
+
+        self.combo = nn.Linear(out*3, embed_size)
+
+    def forward(self, f, m, r):
+        '''
+        Expects 3 tuple arguments in the form of 
+        (file times, file features),
+        (module times, module features),
+        (reg times, reg features)
+        '''
+        f = self.f_rnn(*f)[-1]
+        m = self.m_rnn(*m)[-1]
+        r = self.r_rnn(*r)[-1]
+
+        x = torch.cat([f,m,r], dim=1)
+        return torch.rrelu(self.combo(x))

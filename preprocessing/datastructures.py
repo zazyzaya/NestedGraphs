@@ -115,11 +115,24 @@ class NodeList():
         self.reg_dim = None 
         self.mod_dim = None
 
+
     def __getitem__(self, idx):
         if type(idx) == int:
             return self.nodes[idx]
         else:
             return self.nodes[self.node_map[idx]]
+
+    def __get_empty(self, fn):
+        '''
+        Account for procs which have no associated activities
+        of a certain kind (otherwise the RNN output is indexed wrong)
+        '''
+        if fn == 'files': 
+            return torch.zeros(1,self.file_dim)
+        elif fn == 'regs':
+            return torch.zeros(1,self.reg_dim)
+        elif fn == 'mods':
+            return torch.zeros(1,self.mod_dim)
 
     def add_node(self, ts, pid):
         if pid in self.node_map:
@@ -165,7 +178,6 @@ class NodeList():
 
     def sample_feat(self, fn, batch=[], ts=None):
         times, feats = [],[]
-        indices = []
 
         if not len(batch):
             batch = list(range(self.num_nodes))
@@ -177,13 +189,14 @@ class NodeList():
             if x.size(0):
                 times.append(t)
                 feats.append(x)
-                indices.append(b)
+            else:
+                times.append(torch.zeros(1,1))
+                feats.append(self.__get_empty(fn))
 
         x = pack_sequence(feats, enforce_sorted=False)
         t = pack_sequence(times, enforce_sorted=False)
-        i = torch.tensor(indices)
 
-        return t,x,i
+        return t,x
         
 
 class HostGraph(Data):
@@ -229,6 +242,7 @@ class HostGraph(Data):
 
         self.ready = True 
         self.edge_index = torch.tensor([self.src, self.dst])
-        self.x = torch.cat(self.x, dim=0)
+        self.x = torch.stack(self.x)
+        self.num_nodes = self.x.size(0)
         self.edge_attr = torch.tensor(self.edge_attr)
         
