@@ -20,7 +20,8 @@ class Time2Vec(nn.Module):
     def forward(self, times):
         x = times.data 
         x = self.lin(x)
-        x[:, 1:] = self.f(x[:, 1:])
+        periodic = self.f(x[:, 1:])
+        x = torch.cat([x[:, 0].unsqueeze(-1), periodic], dim=1)
         return repack(x, times)
 
 
