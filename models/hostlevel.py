@@ -29,13 +29,14 @@ class NodeRNN(nn.Module):
     supported_nets = ['GRU', 'LSTM'] #, 'TRANSFORMER'] TODO
 
     def __init__(self, in_feats, hidden_feats, out_feats, t2v_feats=8,
-                rnn_params={'num_layers': 2}, net='GRU', activation=nn.RReLU) -> None:
+                rnn_params={'num_layers': 2}, net='LSTM', activation=nn.RReLU) -> None:
         super().__init__()
 
         assert net.upper() in self.supported_nets, \
             "net parameter must be in %s" % str(self.supported_nets)
 
-        if net.upper() == 'GRU': 
+        self.net = net.upper()
+        if self.net == 'GRU': 
             self.rnn = nn.GRU(in_feats+t2v_feats, hidden_feats, **rnn_params)
         else:
             self.rnn = nn.LSTM(in_feats+t2v_feats, hidden_feats, **rnn_params)
@@ -54,29 +55,34 @@ class NodeRNN(nn.Module):
 
         times = self.t2v(ts)
         x = self.rnn(packed_cat([times, x], dim=1), h0)[1]
+
+        # LSTM returns hidden and cell states; only need hidden
+        if self.net == 'LSTM':
+            x = x[0]
+
         return self.linear(x)
 
 
 class NodeEmbedder(nn.Module):
-    def __init__(self, f_feats, m_feats, r_feats, hidden, out, embed_size):
+    def __init__(self, f_feats, r_feats, m_feats, hidden, out, embed_size):
         super().__init__() 
 
         self.f_rnn = NodeRNN(f_feats, hidden, out)
-        self.m_rnn = NodeRNN(m_feats, hidden, out)
         self.r_rnn = NodeRNN(r_feats, hidden, out)
+        self.m_rnn = NodeRNN(m_feats, hidden, out)
 
         self.combo = nn.Linear(out*3, embed_size)
 
-    def forward(self, f, m, r):
+    def forward(self, data):
         '''
         Expects 3 tuple arguments in the form of 
         (file times, file features),
         (module times, module features),
         (reg times, reg features)
         '''
-        f = self.f_rnn(*f)[-1]
-        m = self.m_rnn(*m)[-1]
-        r = self.r_rnn(*r)[-1]
+        f = self.f_rnn(*data['files'])[-1]
+        r = self.r_rnn(*data['regs'])[-1]
+        m = self.m_rnn(*data['mods'])[-1]
 
-        x = torch.cat([f,m,r], dim=1)
+        x = torch.cat([f,r,m], dim=1)
         return torch.rrelu(self.combo(x))
