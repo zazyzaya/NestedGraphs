@@ -23,36 +23,25 @@ TRUE_VAL = 0.
 FALSE_VAL = 1. # False should be 1 as in an anomaly score
 
 
-def train_step(nodes, graph, emb, gen, desc, e_opt, g_opt, d_opt):
-    start = time.time() 
+def train_step(nodes, graph, emb, gen, desc):
     data = nodes.sample()
 
     # Positive samples & train embedder
-    e_opt.zero_grad()
-    d_opt.zero_grad()
     real = emb.forward(data)
     preds = desc.forward(real, graph.x, graph.edge_index)
     r_loss = criterion(preds, torch.full((graph.num_nodes,1), TRUE_VAL))
-    r_loss.backward()
-    e_opt.step() 
 
     # Negative samples
-    g_opt.zero_grad()
     fake = gen.forward(graph.x).detach()
     preds = desc.forward(fake, graph.x, graph.edge_index)
     f_loss = criterion(preds, torch.full((graph.num_nodes,1), FALSE_VAL))
-    f_loss.backward() 
-    d_opt.step() 
 
     # Train generator
     fake = gen(graph.x)
     preds = desc.forward(fake, graph.x, graph.edge_index)
     g_loss = criterion(preds, torch.full((graph.num_nodes,1), TRUE_VAL))
-    g_loss.backward() 
-    g_opt.step()
 
-    elapsed = time.time() - start
-    return r_loss.item(), f_loss.item(), g_loss.item(), elapsed
+    return r_loss, f_loss, g_loss
 
 
 def data_split(graphs, workers):
@@ -96,29 +85,53 @@ def proc_job(rank, world_size, all_graphs, jobs, epochs=50):
     desc = DDP(desc)
 
     # Initialize optimizers
-    e_opt = Adam(emb.parameters(), lr=0.01)
-    g_opt = Adam(gen.parameters(), lr=0.01)
-    d_opt = Adam(desc.parameters(), lr=0.01)
+    opts = [
+        Adam(emb.parameters(), lr=0.01),
+        Adam(gen.parameters(), lr=0.01),
+        Adam(desc.parameters(), lr=0.01)
+    ]
 
     num_samples = len(my_graphs)
     for e in range(epochs):
+        st = time.time()
+        
+        [o.zero_grad() for o in opts]
+        r_loss = torch.zeros(1)
+        f_loss = torch.zeros(1)
+        g_loss = torch.zeros(1)
+
         for i in range(num_samples):
-            r,f,g,elapsed = train_step(
+            r,f,g = train_step(
                 my_nodes[i], my_graphs[i],
-                emb, gen, desc, 
-                e_opt, g_opt, d_opt
+                emb, gen, desc
             ) 
 
-            if rank == 0:
-                print(
-                    "[%d] Emb: %0.4f, Gen: %0.4f, Disc: %0.4f (%0.2fs)" 
-                    % (e, r, (r+f)/2, g, elapsed)
-                )
+            r_loss += r 
+            f_loss += f 
+            g_loss += g 
 
-        # Unfortunately, unbalanced data means some workers have to 
-        # wait around for workers w more data to finish before continuing
-        dist.barrier()
 
+        # Only step after all data is processed
+        # this acts as a barrier to prevent workers with 
+        # fewer graphs from processing them more often    
+        if rank == 0:
+            print(
+                "[%d] Emb: %0.4f, Gen: %0.4f, Disc: %0.4f (%0.2fs)" 
+                % (e, r.item(), (r+f).item()/2, g.item(), time.time()-st)
+            )
+            print("backward pass ", end='')
+            st = time.time() 
+
+        r_loss.backward() 
+        f_loss.backward() 
+        g_loss.backward()
+        [o.step() for o in opts]
+
+        if rank == 0:
+            print("%0.2fs" % (time.time() - st))
+
+
+    dist.barrier()
     if rank == 0:
         torch.save(emb.state_dict(), 'saved_models/emb.pkl')
         torch.save(desc.state_dict(), 'saved_models/desc.pkl')
