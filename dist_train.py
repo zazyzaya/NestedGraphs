@@ -56,7 +56,7 @@ def data_split(graphs, workers):
 
     return jobs
 
-def proc_job(rank, world_size, all_graphs, jobs, epochs=50):
+def proc_job(rank, world_size, all_graphs, jobs, epochs=250):
     # DDP info
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = '42069'
@@ -130,12 +130,18 @@ def proc_job(rank, world_size, all_graphs, jobs, epochs=50):
         if rank == 0:
             print("%0.2fs" % (time.time() - st))
 
+        if rank == 0 and e % 10 == 0:
+            torch.save(emb.module, 'saved_models/emb.pkl')
+            torch.save(desc.module, 'saved_models/desc.pkl')
+            torch.save(gen.module, 'saved_models/gen.pkl')
+        
+        dist.barrier()
 
     dist.barrier()
     if rank == 0:
-        torch.save(emb.state_dict(), 'saved_models/emb.pkl')
-        torch.save(desc.state_dict(), 'saved_models/desc.pkl')
-        torch.save(gen.state_dict(), 'saved_models/gen.pkl')
+        torch.save(emb.module, 'saved_models/emb.pkl')
+        torch.save(desc.module, 'saved_models/desc.pkl')
+        torch.save(gen.module, 'saved_models/gen.pkl')
 
         dist.destroy_process_group()
 

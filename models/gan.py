@@ -41,4 +41,6 @@ class GATDescriminator(nn.Module):
         x = torch.cat([z,x], dim=1)
         x = torch.rrelu(self.gat1(x, ei))
         x = torch.rrelu(self.gat2(x, ei))
-        return torch.sigmoid(self.lin(x))
+        
+        # Sigmoid applied later. Using BCE loss w Logits
+        return self.lin(x)

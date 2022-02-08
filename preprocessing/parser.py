@@ -421,7 +421,7 @@ def load_group(fid, file_path, total):
             if is_row_selected == True:
                 is_anomaly = 1 if is_anomalous_log(row) else 0
                 with open(HOME + file_name, "a+") as fa:
-                    parsed_row = [row['timestamp'], row['object'], row['action'], feature_vector, is_anomaly]
+                    parsed_row = [row['timestamp'], row['object'], row['action'], feature_vector]#, is_anomaly]
                     writer = csv.writer(fa)
                     writer.writerow(parsed_row)
 

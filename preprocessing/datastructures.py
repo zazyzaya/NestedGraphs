@@ -15,19 +15,28 @@ class DynamicFeatures():
 
     def __len__(self):
         self.defrag()
-        return self.feats[0].size(0)
+        
+        if len(self.feats):
+            return self.feats[0].size(0)
+        return 0
 
     # Avoid stacking tensors every time
-    def get_data(self, time=0):
+    def get_data(self, s_time=None, e_time=None):
         if len(self.feats) == 0:
             return torch.tensor([]), torch.tensor([])
 
         self.defrag()
-        if not time:
+        if s_time is None and e_time is None:
             return self.times[0], self.feats[0]
         
         # If desired, only access feats observed up until `time`
-        indices = (self.times[0] <= time).squeeze()
+        if e_time is None:
+            indices = (s_time <= self.times[0]).squeeze()
+        elif s_time is None:
+            indices = (self.times[0] <= e_time).squeeze()
+        else:
+            indices = (s_time <= self.times[0] and self.times[0] <= e_time).squeeze()
+        
         return self.times[0][indices], self.feats[0][indices]
 
     # Just mainitain a list until accessed
@@ -66,23 +75,23 @@ class Node():
         return len(self.files), len(self.regs), len(self.mods)
 
     # Getters
-    def get_files(self, time=0):
-        return self.files.get_data(time)
-    def get_regs(self, time=0):
-        return self.regs.get_data(time)
-    def get_mods(self, time=0):
-        return self.mods.get_data(time)
+    def get_files(self, s=None,e=None):
+        return self.files.get_data(s,e)
+    def get_regs(self,  s=None,e=None):
+        return self.regs.get_data(s,e)
+    def get_mods(self,  s=None,e=None):
+        return self.mods.get_data(s,e)
     
-    def getter(self, fn, time=0):
+    def getter(self, fn,  s=None,e=None):
         '''
         Gets arbitrary value specified by fn 
         '''
         if fn == 'files': 
-            return self.files.get_data(time)
+            return self.files.get_data(s,e)
         elif fn == 'regs': 
-            return self.regs.get_data(time)
+            return self.regs.get_data(s,e)
         elif fn == 'mods':
-            return self.mods.get_data(time)
+            return self.mods.get_data(s,e)
         else:
             raise ArgumentError("fn must be in ['files', 'regs', 'mods']")
 
@@ -135,6 +144,8 @@ class NodeList():
             return torch.zeros(1,self.mod_dim)
 
     def add_node(self, ts, pid):
+        pid = pid.strip()
+
         if pid in self.node_map:
             return False
 
@@ -145,18 +156,24 @@ class NodeList():
 
     # Add features to nodes
     def add_file(self, ts, pid, file):
+        pid = pid.strip() 
+
         if self.file_dim is None:
             self.file_dim = file.size(-1)
         if pid in self.node_map:
             self.nodes[self.node_map[pid]].add_file(ts, file)
 
     def add_reg(self, ts, pid, reg):
+        pid = pid.strip()
+        
         if self.reg_dim is None:
             self.reg_dim = reg.size(-1)
         if pid in self.node_map:
             self.nodes[self.node_map[pid]].add_reg(ts, reg)
 
     def add_mod(self, ts, pid, mod):
+        pid = pid.strip()
+
         if self.mod_dim is None:
             self.mod_dim = mod.size(-1)
         if pid in self.node_map:
@@ -166,24 +183,24 @@ class NodeList():
         [n.finalize() for n in self.nodes]
 
 
-    def sample(self, ts=None, batch=[]):
+    def sample(self, s=None, e=None, batch=[]):
         if not len(batch):
             batch = list(range(self.num_nodes))
         
         return {
-            'files': self.sample_feat('files', batch=batch, ts=ts),
-            'regs': self.sample_feat('regs', batch=batch, ts=ts),
-            'mods': self.sample_feat('mods', batch=batch, ts=ts)
+            'files': self.sample_feat('files', batch=batch, s=s,e=e),
+            'regs': self.sample_feat('regs', batch=batch, s=s, e=e),
+            'mods': self.sample_feat('mods', batch=batch, s=s, e=e)
         }
 
-    def sample_feat(self, fn, batch=[], ts=None):
+    def sample_feat(self, fn, batch=[], s=None, e=None):
         times, feats = [],[]
 
         if not len(batch):
             batch = list(range(self.num_nodes))
 
         for b in batch:
-            t,x = self.nodes[b].getter(fn, time=ts)
+            t,x = self.nodes[b].getter(fn,s,e)
             
             # Avoid errors from empty tensors
             if x.size(0):
@@ -218,12 +235,17 @@ class HostGraph(Data):
 
     def add_node(self, ts, pid, feat, nodelist):
         assert not self.ready, 'add_node undefined after self.finalize() has been called'
+        
+        pid = pid.strip()
         if nodelist.add_node(ts, pid):
             self.x.append(feat)
 
     def add_edge(self, ts, pid, ppid, feat, pfeat, nodelist):
         assert not self.ready, 'add_edge undefined after self.finalize() has been called'
          
+        pid = pid.strip()
+        ppid = ppid.strip()
+
         self.add_node(ts, ppid, pfeat, nodelist)
         self.add_node(ts, pid, feat, nodelist)
         self.src.append(nodelist.node_map[ppid])

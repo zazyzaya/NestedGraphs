@@ -7,7 +7,7 @@ from .hasher import proc_feats, file_feats, reg_feats, mod_feats
 from .datastructures import HostGraph, NodeList
 
 # Globals 
-JOBS = 16
+JOBS = 8
 SOURCE = '/mnt/raid0_24TB/datasets/NCR2/nested_optc/hosts/'
 
 # Hyper parameters
