@@ -32,6 +32,8 @@ def parse_line(graph: HostGraph, nodelist: NodeList, line: str) -> None:
     feats = fields[3][2:-3].split(',')
 
     ts = fmt_ts(ts)
+    if ts == 0:
+        return 
 
     if obj == 'PROCESS':
         # For now just add process.create events
