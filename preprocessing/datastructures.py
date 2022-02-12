@@ -131,6 +131,9 @@ class NodeList():
         else:
             return self.nodes[self.node_map[idx]]
 
+    def __len__(self):
+        return len(self.nodes)
+
     def __get_empty(self, fn):
         '''
         Account for procs which have no associated activities
@@ -144,9 +147,7 @@ class NodeList():
             return torch.zeros(1,self.mod_dim)
 
     def add_node(self, ts, pid):
-        pid = pid.strip()
-
-        if pid in self.node_map:
+        if pid in self.node_map or '-1' in pid:
             return False
 
         self.node_map[pid] = self.num_nodes 
@@ -156,7 +157,8 @@ class NodeList():
 
     # Add features to nodes
     def add_file(self, ts, pid, file):
-        pid = pid.strip() 
+        if '-1' in pid:
+            return 
 
         if self.file_dim is None:
             self.file_dim = file.size(-1)
@@ -164,16 +166,18 @@ class NodeList():
             self.nodes[self.node_map[pid]].add_file(ts, file)
 
     def add_reg(self, ts, pid, reg):
-        pid = pid.strip()
-        
+        if '-1' in pid:
+            return 
+
         if self.reg_dim is None:
             self.reg_dim = reg.size(-1)
         if pid in self.node_map:
             self.nodes[self.node_map[pid]].add_reg(ts, reg)
 
     def add_mod(self, ts, pid, mod):
-        pid = pid.strip()
-
+        if '-1' in pid:
+            return 
+            
         if self.mod_dim is None:
             self.mod_dim = mod.size(-1)
         if pid in self.node_map:
@@ -236,18 +240,21 @@ class HostGraph(Data):
     def add_node(self, ts, pid, feat, nodelist):
         assert not self.ready, 'add_node undefined after self.finalize() has been called'
         
-        pid = pid.strip()
+        if '-1' in pid:
+            return 
+
         if nodelist.add_node(ts, pid):
             self.x.append(feat)
 
     def add_edge(self, ts, pid, ppid, feat, pfeat, nodelist):
         assert not self.ready, 'add_edge undefined after self.finalize() has been called'
-         
-        pid = pid.strip()
-        ppid = ppid.strip()
 
         self.add_node(ts, ppid, pfeat, nodelist)
         self.add_node(ts, pid, feat, nodelist)
+
+        if '-1' in pid or '-1' in ppid:
+            return
+
         self.src.append(nodelist.node_map[ppid])
         self.dst.append(nodelist.node_map[pid])
         self.edge_attr.append(ts)

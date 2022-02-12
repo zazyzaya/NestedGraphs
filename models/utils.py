@@ -1,5 +1,5 @@
 import torch 
-from torch.nn.utils.rnn import PackedSequence
+from torch.nn.utils.rnn import PackedSequence, pad_packed_sequence
 
 def repack(data, x):
     '''
@@ -80,7 +80,16 @@ def get_last_vectors_unpadded(seq):
     mapped_indices = torch.zeros(seq.sorted_indices.size(0), dtype=torch.int64)
     mapped_indices[seq.sorted_indices] = torch.tensor(idxs)
     return seq.data[mapped_indices]
+
+
+def packed_aggr(seq, aggr='mean'):
+    seq,batch = pad_packed_sequence(seq)
     
+    if aggr == 'mean' or aggr == 'avg':
+        return seq.sum(dim=0)/batch.unsqueeze(1)
+    else:
+        raise NotImplementedError('Sorry, havent written the %s function yet' % aggr)
+
 def masked_softmax(A, dim):
     # matrix A is the one you want to do mask softmax at dim=1
     A_max = torch.max(A,dim=dim,keepdim=True)[0]

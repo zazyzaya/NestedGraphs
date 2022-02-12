@@ -11,7 +11,7 @@ from torch.nn import BCEWithLogitsLoss
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import Adam 
 
-from models.hostlevel import NodeEmbedder
+from models.hostlevel import NodeEmbedderRNN, NodeEmbedderSelfAttention, NodeEmbedderAggr
 from models.gan import NodeGenerator, GATDescriminator
 
 N_JOBS = 4 # How many worker processes will train the model
@@ -22,6 +22,8 @@ EMBED_SIZE = 16
 TRUE_VAL = 0.
 FALSE_VAL = 1. # False should be 1 as in an anomaly score
 
+# Decide which embedder to use here
+NodeEmbedder = NodeEmbedderAggr
 
 def train_step(nodes, graph, emb, gen, desc):
     data = nodes.sample()
@@ -40,7 +42,7 @@ def train_step(nodes, graph, emb, gen, desc):
     fake = gen(graph.x)
     preds = desc.forward(fake, graph.x, graph.edge_index)
     g_loss = criterion(preds, torch.full((graph.num_nodes,1), TRUE_VAL))
-
+    
     return r_loss, f_loss, g_loss
 
 
@@ -61,6 +63,8 @@ def proc_job(rank, world_size, all_graphs, jobs, epochs=250):
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = '42069'
     dist.init_process_group("gloo", rank=rank, world_size=world_size)
+    
+    # Sets number of threads used by this worker
     torch.set_num_threads(P_THREADS)
 
     my_graphs=[]; my_nodes=[]
@@ -87,8 +91,8 @@ def proc_job(rank, world_size, all_graphs, jobs, epochs=250):
     # Initialize optimizers
     opts = [
         Adam(emb.parameters(), lr=0.01),
-        Adam(gen.parameters(), lr=0.01),
-        Adam(desc.parameters(), lr=0.01)
+        Adam(desc.parameters(), lr=0.01),
+        Adam(gen.parameters(), lr=0.01)
     ]
 
     num_samples = len(my_graphs)
@@ -96,6 +100,7 @@ def proc_job(rank, world_size, all_graphs, jobs, epochs=250):
         st = time.time()
         
         [o.zero_grad() for o in opts]
+
         r_loss = torch.zeros(1)
         f_loss = torch.zeros(1)
         g_loss = torch.zeros(1)
@@ -122,15 +127,15 @@ def proc_job(rank, world_size, all_graphs, jobs, epochs=250):
             print("backward pass ", end='')
             st = time.time() 
 
-        r_loss.backward() 
+        g_loss.backward() 
         f_loss.backward() 
-        g_loss.backward()
+        r_loss.backward()
+
         [o.step() for o in opts]
 
         if rank == 0:
             print("%0.2fs" % (time.time() - st))
 
-        if rank == 0 and e % 10 == 0:
             torch.save(emb.module, 'saved_models/emb.pkl')
             torch.save(desc.module, 'saved_models/desc.pkl')
             torch.save(gen.module, 'saved_models/gen.pkl')
@@ -146,7 +151,7 @@ def proc_job(rank, world_size, all_graphs, jobs, epochs=250):
         dist.destroy_process_group()
 
 
-TRAIN_GRAPHS = [i for i in range(1,11)]
+TRAIN_GRAPHS = [i for i in range(1,5)]
 DATA_HOME = 'inputs/benign/'
 def main():
     world_size = min(N_JOBS, len(TRAIN_GRAPHS))

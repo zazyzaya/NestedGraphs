@@ -18,6 +18,7 @@ MOD_DEPTH = 4 # It's very rarely > 3
 
 # Converts from ISO timestamp to UTC time since epoch
 fmt_ts = lambda x : isoparse(x).timestamp()
+fmt_p = lambda pid,proc : pid.strip() + ':' + proc.strip().upper().split('\\\\')[-1].replace("'",'')
 
 def parse_line(graph: HostGraph, nodelist: NodeList, line: str) -> None:
     '''
@@ -42,23 +43,23 @@ def parse_line(graph: HostGraph, nodelist: NodeList, line: str) -> None:
 
         pid, ppid, path, ppath = feats
         graph.add_edge(
-            ts, pid, ppid, 
+            ts, fmt_p(pid,path), fmt_p(ppid,ppath), 
             proc_feats(path, PROC_DEPTH), 
             proc_feats(ppath, PROC_DEPTH),
             nodelist
         )
 
     elif obj == 'FILE':
-        pid, ppid, path = feats[:3]
-        nodelist.add_file(ts, pid, file_feats(path, act, FILE_DEPTH))
+        pid, ppid, path, p_img = feats[:4]
+        nodelist.add_file(ts, fmt_p(pid,p_img), file_feats(path, act, FILE_DEPTH))
 
     elif obj == 'REGISTRY': 
-        pid, ppid, key = feats[:3]
-        nodelist.add_reg(ts, pid, reg_feats(key, act, REG_DEPTH))
+        pid, ppid, key, _, p_img = feats[:5]
+        nodelist.add_reg(ts, fmt_p(pid,p_img), reg_feats(key, act, REG_DEPTH))
 
     elif obj == 'MODULE': 
-        pid, ppid, _, mod = feats 
-        nodelist.add_mod(ts, pid, mod_feats(mod, MOD_DEPTH))
+        pid, ppid, p_img, mod = feats[:4]
+        nodelist.add_mod(ts, fmt_p(pid,p_img), mod_feats(mod, MOD_DEPTH))
 
 
 def build_graph(host: int):
@@ -90,3 +91,6 @@ def build_graphs(hosts):
     return Parallel(n_jobs=JOBS, prefer='processes')(
         delayed(build_graph)(h) for h in hosts
     )
+
+if __name__ == '__main__':
+    build_graph(1)
