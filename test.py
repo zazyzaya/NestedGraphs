@@ -1,13 +1,17 @@
 import pickle 
 import torch 
+import datetime as dt
+from zoneinfo import ZoneInfo
 
 from graph_utils import propogate_labels
 
 HOME = '/mnt/raid0_24TB/isaiah/code/NestedGraphs/'
 
+fmt_ts = lambda x : dt.datetime.fromtimestamp(x).astimezone(ZoneInfo('Etc/GMT+4')).isoformat()
+
 def test(nodes, graph, model_path=HOME+'saved_models/'):
     inv_map = {v:k for k,v in nodes.node_map.items()}
-    labels = propogate_labels(graph,nodes)
+    #labels = propogate_labels(graph,nodes)
     
     emb = torch.load(model_path+'emb.pkl')
     desc = torch.load(model_path+'desc.pkl')
@@ -23,10 +27,11 @@ def test(nodes, graph, model_path=HOME+'saved_models/'):
         f.write('PID,anom_score\n')
 
         for i in range(vals.size(0)):
-            outstr = '%s,%f,%0.1f\n' % (
+            outstr = '%s,%f,%s\n' % (
                 inv_map[idx[i].item()],
                 vals[i],
-                labels[i]
+                fmt_ts(nodes[i].ts)
+                #labels[i]
             )
 
             f.write(outstr)

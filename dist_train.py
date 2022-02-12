@@ -19,8 +19,8 @@ P_THREADS = 4 # About the point of diminishing returns from experiments
 
 criterion = BCEWithLogitsLoss()
 EMBED_SIZE = 16
-TRUE_VAL = 0.
-FALSE_VAL = 1. # False should be 1 as in an anomaly score
+TRUE_VAL = 0.1 # Discourage every negative sample being -9999999
+FALSE_VAL = 0.9 # False should approach 1 as in an anomaly score
 
 # Decide which embedder to use here
 NodeEmbedder = NodeEmbedderAggr
@@ -97,45 +97,35 @@ def proc_job(rank, world_size, all_graphs, jobs, epochs=250):
 
     num_samples = len(my_graphs)
     for e in range(epochs):
-        st = time.time()
-        
-        [o.zero_grad() for o in opts]
-
-        r_loss = torch.zeros(1)
-        f_loss = torch.zeros(1)
-        g_loss = torch.zeros(1)
-
         for i in range(num_samples):
-            r,f,g = train_step(
+            st = time.time() 
+
+            [o.zero_grad() for o in opts]
+
+            r_loss,f_loss,g_loss = train_step(
                 my_nodes[i], my_graphs[i],
                 emb, gen, desc
             ) 
 
-            r_loss += r 
-            f_loss += f 
-            g_loss += g 
+            # Only step after all data is processed
+            # this acts as a barrier to prevent workers with 
+            # fewer graphs from processing them more often    
+            if rank == 0:
+                print(
+                    "[%d-%d] Emb: %0.4f, Disc: %0.4f, Gen: %0.4f (%0.2fs)" 
+                    % (e, i, r_loss.item(), (r_loss+f_loss).item()/2, g_loss.item(), time.time()-st)
+                )
+                print("backward pass")
+                st = time.time() 
 
+            g_loss.backward() 
+            f_loss.backward() 
+            r_loss.backward()
 
-        # Only step after all data is processed
-        # this acts as a barrier to prevent workers with 
-        # fewer graphs from processing them more often    
-        if rank == 0:
-            print(
-                "[%d] Emb: %0.4f, Gen: %0.4f, Disc: %0.4f (%0.2fs)" 
-                % (e, r.item(), (r+f).item()/2, g.item(), time.time()-st)
-            )
-            print("backward pass ", end='')
-            st = time.time() 
-
-        g_loss.backward() 
-        f_loss.backward() 
-        r_loss.backward()
-
-        [o.step() for o in opts]
-
-        if rank == 0:
+            [o.step() for o in opts]
             print("%0.2fs" % (time.time() - st))
 
+        if rank == 0:
             torch.save(emb.module, 'saved_models/emb.pkl')
             torch.save(desc.module, 'saved_models/desc.pkl')
             torch.save(gen.module, 'saved_models/gen.pkl')
@@ -151,7 +141,7 @@ def proc_job(rank, world_size, all_graphs, jobs, epochs=250):
         dist.destroy_process_group()
 
 
-TRAIN_GRAPHS = [i for i in range(1,5)]
+TRAIN_GRAPHS = [i for i in range(1,13)]
 DATA_HOME = 'inputs/benign/'
 def main():
     world_size = min(N_JOBS, len(TRAIN_GRAPHS))
