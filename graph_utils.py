@@ -36,5 +36,5 @@ def propogate_labels(g, nodes, label_f=HOME+'inputs/anoms.csv'):
                 domain.add(c.item())
                 labels[c] = labels[mal]+1
 
-    labels[labels != 0] = 1/labels[labels!=0]
+    #labels[labels != 0] = 1/labels[labels!=0]
     return labels

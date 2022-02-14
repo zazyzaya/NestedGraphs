@@ -18,7 +18,7 @@ N_JOBS = 4 # How many worker processes will train the model
 P_THREADS = 4 # About the point of diminishing returns from experiments
 
 criterion = BCEWithLogitsLoss()
-EMBED_SIZE = 16
+EMBED_SIZE = 32
 TRUE_VAL = 0.1 # Discourage every negative sample being -9999999
 FALSE_VAL = 0.9 # False should approach 1 as in an anomaly score
 
