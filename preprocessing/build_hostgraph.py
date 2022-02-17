@@ -51,16 +51,21 @@ def parse_line(graph: HostGraph, nodelist: NodeList, line: str) -> None:
 
     elif obj == 'FILE':
         pid, ppid, path, p_img = feats[:4]
-        nodelist.add_file(ts, fmt_p(pid,p_img), file_feats(path, act, FILE_DEPTH))
+
+        if act != 'READ':
+            nodelist.add_file(ts, fmt_p(pid,p_img), file_feats(path, act, FILE_DEPTH))
 
     elif obj == 'REGISTRY': 
         pid, ppid, key, _, p_img = feats[:5]
         nodelist.add_reg(ts, fmt_p(pid,p_img), reg_feats(key, act, REG_DEPTH))
 
+    '''
     elif obj == 'MODULE': 
         pid, ppid, p_img, mod = feats[:4]
-        nodelist.add_mod(ts, fmt_p(pid,p_img), mod_feats(mod, MOD_DEPTH))
 
+        if mod.endswith('.dll'):
+            nodelist.add_mod(ts, fmt_p(pid,p_img), mod_feats(mod, MOD_DEPTH))
+    '''
 
 def build_graph(host: int):
     g = HostGraph(host)

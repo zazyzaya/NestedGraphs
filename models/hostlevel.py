@@ -1,6 +1,8 @@
+from turtle import forward
 import torch 
 from torch import nn 
 from torch.nn.utils.rnn import pad_packed_sequence
+from torch_geometric.nn import GCNConv, Sequential as GSequential
 
 from .utils import packed_cat, packed_fn, repack, packed_cat, packed_aggr, \
     masked_softmax, get_last_vectors_unpadded
@@ -74,7 +76,7 @@ class NodeEmbedderRNN(nn.Module):
 
         self.combo = nn.Linear(out*3, embed_size)
 
-    def forward(self, data):
+    def forward(self, data, *args):
         '''
         Expects 3 tuple arguments in the form of 
         (file times, file features),
@@ -160,21 +162,21 @@ class NodeEmbedderSelfAttention(nn.Module):
         self.t2v = Time2Vec(t2v_dim)
         self.f_attn = KQV_Attention(f_feats+t2v_dim, hidden, out)
         self.r_attn = KQV_Attention(r_feats+t2v_dim, hidden, out)
-        self.m_attn = KQV_Attention(m_feats+t2v_dim, hidden, out)
+        #self.m_attn = KQV_Attention(m_feats+t2v_dim, hidden, out)
 
-        self.combo = nn.Linear(out*3, embed_size)
+        self.combo = nn.Linear(out*2, embed_size)
 
-    def forward(self, data):
+    def forward(self, data, *args):
         t,f = data['files']
         f = self.f_attn(self.t2v(t), f)
 
         t,r = data['regs']
         r = self.r_attn(self.t2v(t), r)
 
-        t,m = data['mods']
-        m = self.m_attn(self.t2v(t), m)
+        #t,m = data['mods']
+        #m = self.m_attn(self.t2v(t), m)
 
-        x = torch.cat([f,r,m], dim=1)
+        x = torch.cat([f,r], dim=1)
         return torch.rrelu(self.combo(x))
 
 
@@ -206,7 +208,7 @@ class NodeEmbedderAggr(nn.Module):
 
         self.combo = nn.Linear(out*3, embed_size)
 
-    def forward(self, data):
+    def forward(self, data, *args):
         t,f = data['files']
         f = self.f_aggr(self.t2v(t), f)
 
@@ -218,3 +220,26 @@ class NodeEmbedderAggr(nn.Module):
 
         x = torch.cat([f,r,m], dim=1)
         return torch.rrelu(self.combo(x))
+
+
+class NodeEmbedderSelfAttnTopology(NodeEmbedderSelfAttention):
+    def __init__(self, f_feats, r_feats, m_feats, hidden, out, embed_size, t2v_dim=8):
+        super().__init__(f_feats, r_feats, m_feats, hidden, out, embed_size, t2v_dim)
+
+        self.combo = GCNConv(out*3, hidden)
+        self.combo2 = GCNConv(hidden, embed_size)  
+
+    def forward(self, data, graph):
+        t,f = data['files']
+        f = self.f_attn(self.t2v(t), f)
+
+        t,r = data['regs']
+        r = self.r_attn(self.t2v(t), r)
+
+        t,m = data['mods']
+        m = self.m_attn(self.t2v(t), m)
+
+        # Propogate node data through edges
+        x = torch.cat([f,r,m], dim=1)
+        x = torch.rrelu(self.combo(x, graph.edge_index))
+        return torch.rrelu(self.combo2(x, graph.edge_index))

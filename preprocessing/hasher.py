@@ -48,7 +48,8 @@ def mod_feats(path: str, depth: int) -> torch.Tensor:
     '''
     return path_to_tensor(path, depth)
 
-file_acts = ['CREATE','DELETE','MODIFY','READ','RENAME','WRITE']
+# Ignores 'READ' actions
+file_acts = ['CREATE','DELETE','MODIFY','RENAME','WRITE']
 FILE_ACTIONS = {k:v for v,k in enumerate(file_acts)}
 def file_feats(path: str, action: str, depth: int) -> torch.Tensor:
     '''
@@ -56,6 +57,10 @@ def file_feats(path: str, action: str, depth: int) -> torch.Tensor:
     '''
     path = path_to_tensor(path, depth)
     action_t = torch.zeros(len(FILE_ACTIONS))
+    
+    if action not in FILE_ACTIONS:
+        return None 
+
     action_t[FILE_ACTIONS[action]]=1
     
     # Return path encoding and one-hot of how it was accessed

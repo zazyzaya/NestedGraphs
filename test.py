@@ -13,6 +13,12 @@ fmt_ts = lambda x : dt.datetime.fromtimestamp(x).astimezone(
     ZoneInfo('Etc/GMT+4')
 ).isoformat()[11:-6]
 
+def sample(nodes):
+    return {
+        'regs': nodes.sample_feat('regs'),
+        'files': nodes.sample_feat('files')
+    }
+
 def test_no_labels(nodes, graph, model_path=HOME+'saved_models/'):
     inv_map = {v:k for k,v in nodes.node_map.items()}
     
@@ -20,7 +26,7 @@ def test_no_labels(nodes, graph, model_path=HOME+'saved_models/'):
     desc = torch.load(model_path+'desc.pkl')
 
     with torch.no_grad():
-        data = nodes.sample()
+        data = sample(nodes)
         zs = emb(data)
         preds = desc(zs, graph.x, graph.edge_index)
 
@@ -47,8 +53,8 @@ def test(nodes, graph, model, model_path=HOME+'saved_models/'):
     desc = torch.load(model_path+'desc%s.pkl' % model)
 
     with torch.no_grad():
-        data = nodes.sample()
-        zs = emb(data)
+        data = sample(nodes)
+        zs = emb(data, graph)
         preds = desc(zs, graph.x, graph.edge_index)
 
     vals, idx = torch.sort(preds.squeeze(-1), descending=True)
