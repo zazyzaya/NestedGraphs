@@ -4,6 +4,7 @@ import pickle
 import torch 
 import datetime as dt
 from zoneinfo import ZoneInfo
+from sklearn.metrics import average_precision_score as ap, roc_auc_score as auc
 
 from graph_utils import propogate_labels
 
@@ -55,22 +56,30 @@ def test(nodes, graph, model, model_path=HOME+'saved_models/'):
     with torch.no_grad():
         data = sample(nodes)
         zs = emb(data, graph)
-        preds = desc(zs, graph.x, graph.edge_index)
+        preds = desc(zs, graph)
 
     vals, idx = torch.sort(preds.squeeze(-1), descending=True)
+    labels = labels[idx]
+
+    auc_score = auc(labels.clamp(0,1), vals)
+    ap_score = ap(labels.clamp(0,1), vals)
 
     with open(HOME+"predictions/preds%d%s.csv" % (graph.gid, model), 'w+') as f:
-        f.write('PID,anom_score\n')
+        aucap = "AUC: %f\tAP: %f\n" % (auc_score, ap_score)
+        f.write(aucap)
 
         for i in range(vals.size(0)):
-            outstr = '%s,%f,%0.1f\n' % (
+            outstr = '%s\t%f\t%0.1f\n' % (
                 inv_map[idx[i].item()],
                 vals[i],
-                labels[idx[i]]
+                labels[i]
             )
 
             f.write(outstr)
             print(outstr, end='')
+        
+        print()
+        print(aucap,end='')
 
 if __name__ == '__main__':
     if len(sys.argv) >= 2:
