@@ -66,7 +66,7 @@ def test(nodes, graph, model, model_path=HOME+'saved_models/'):
 
     with open(HOME+"predictions/preds%d%s.csv" % (graph.gid, model), 'w+') as f:
         aucap = "AUC: %f\tAP: %f\n" % (auc_score, ap_score)
-        f.write(aucap)
+        f.write(aucap + '\n')
 
         for i in range(vals.size(0)):
             outstr = '%s\t%f\t%0.1f\n' % (
@@ -92,7 +92,7 @@ if __name__ == '__main__':
     else:
         model = ''
 
-    print("Testing host %04d" % i)
+    print("Testing host %04d with %s model" % (i, model))
     with open(HOME+'inputs/mal/graph%d.pkl' % i, 'rb') as f:
         graph = pickle.load(f)
     with open(HOME+'inputs/mal/nodes%d.pkl' % i, 'rb') as f:
