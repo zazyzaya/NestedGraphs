@@ -9,10 +9,10 @@ import torch.distributed.rpc as rpc
 import torch.multiprocessing as mp
 from torch.nn import BCEWithLogitsLoss
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.optim import Adam 
+from torch.optim import Adam
 
 from models.hostlevel import NodeEmbedderRNN, NodeEmbedderSelfAttention, NodeEmbedderAggr, NodeEmbedderSelfAttnTopology
-from models.gan import NodeGenerator, GATDiscriminator, NodeGeneratorTopology
+from models.emb_gan import NodeGenerator, GATDiscriminator, NodeGeneratorTopology
 
 N_JOBS = 4 # How many worker processes will train the model
 P_THREADS = 4 # About the point of diminishing returns from experiments
@@ -21,6 +21,8 @@ criterion = BCEWithLogitsLoss()
 EMBED_SIZE = 32
 TRUE_VAL = 0.1 # Discourage every negative sample being -9999999
 FALSE_VAL = 0.9 # False should approach 1 as in an anomaly score
+
+PATIENCE = 25
 
 # Decide which embedder to use here
 NodeEmb = NodeEmbedderSelfAttention
@@ -82,7 +84,7 @@ def data_split(graphs, workers):
 
     return jobs
 
-def proc_job(rank, world_size, all_graphs, jobs, epochs=250):
+def proc_job(rank, world_size, all_graphs, jobs, val, epochs=250):
     # DDP info
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = '42069'
@@ -98,6 +100,11 @@ def proc_job(rank, world_size, all_graphs, jobs, epochs=250):
         with open(DATA_HOME + 'nodes%d.pkl' % all_graphs[gid], 'rb') as f:
             my_nodes.append(pickle.load(f))
 
+    with open(DATA_HOME + 'graph%d.pkl' % (val+rank), 'rb') as f:
+        val_graph = pickle.load(f)
+    with open(DATA_HOME + 'nodes%d.pkl' % (val+rank), 'rb') as f:
+        val_nodes = pickle.load(f)
+
     emb = NodeEmb(
         my_nodes[0].file_dim, 
         my_nodes[0].reg_dim,
@@ -105,18 +112,19 @@ def proc_job(rank, world_size, all_graphs, jobs, epochs=250):
         16, 8, EMBED_SIZE
     )
     gen = NodeGen(my_graphs[0].x.size(1), 32, 64, EMBED_SIZE)
-    desc = GATDiscriminator(EMBED_SIZE, my_graphs[0].x.size(1), 16)
+    disc = GATDiscriminator(EMBED_SIZE, 16, heads=16)
 
     # Initialize shared models
     gen = DDP(gen)
     emb = DDP(emb)
-    desc = DDP(desc)
+    disc = DDP(disc)
 
     # Initialize optimizers
     e_opt = Adam(emb.parameters(), lr=0.01)
-    d_opt = Adam(desc.parameters(), lr=0.01)
+    d_opt = Adam(disc.parameters(), lr=0.01)
     g_opt = Adam(gen.parameters(), lr=0.01)
     
+    best = float('inf')
     num_samples = len(my_graphs)
     for e in range(epochs):
         for i in range(num_samples):
@@ -124,7 +132,7 @@ def proc_job(rank, world_size, all_graphs, jobs, epochs=250):
 
             d_loss,g_loss = train_step(
                 my_nodes[i], my_graphs[i],
-                emb, gen, desc,
+                emb, gen, disc,
                 e_opt, g_opt, d_opt
             ) 
 
@@ -137,19 +145,55 @@ def proc_job(rank, world_size, all_graphs, jobs, epochs=250):
                     % (e, i, d_loss, g_loss, time.time()-st)
                 )
 
-        if rank == 0:
-            torch.save(desc.module, 'saved_models/desc.pkl')
-            torch.save(emb.module, 'saved_models/emb.pkl')
-            torch.save(gen.module, 'saved_models/gen.pkl')
-        
+        # Validation step 
+        with torch.no_grad():
+            disc.eval()
+            gen.eval()
+            
+            data = sample(val_nodes)
+            
+            embs = emb.forward(data)
+            t_preds = disc.forward(embs, val_graph)
+            
+            fake = gen.forward(val_graph)
+            f_preds = disc.forward(fake, val_graph)
+
+            preds = torch.cat([t_preds, f_preds], dim=1)
+            labels = torch.cat([
+                torch.full(t_preds.size(), TRUE_VAL),
+                torch.full(f_preds.size(), FALSE_VAL)
+            ], dim=1)
+
+            val_loss = criterion(preds, labels)
+
+        # Synchronize value across all machines
+        dist.all_reduce(val_loss)
+        print("Validation loss: %0.4f" % (val_loss.item()/world_size), end='')
+
+        if val_loss < best:
+            print("*")
+            best = val_loss 
+            no_improvement = 0
+
+            if rank == 0:
+                torch.save(disc.module, 'saved_models/embedder/disc.pkl')
+                torch.save(gen.module, 'saved_models/embedder/gen.pkl')
+                torch.save(emb.module, 'saved_models/embedder/emb.pkl')
+
+        else:
+            print()
+            no_improvement += 1
+            if no_improvement > PATIENCE:
+                if rank == 0:
+                    print("Early stopping!")
+                break     
+            
         dist.barrier()
 
     dist.barrier()
+    
+    # Cleanup
     if rank == 0:
-        torch.save(desc.module, 'saved_models/desc.pkl')
-        torch.save(emb.module, 'saved_models/emb.pkl')
-        torch.save(gen.module, 'saved_models/gen.pkl')
-
         dist.destroy_process_group()
 
 
@@ -160,7 +204,7 @@ def main():
     jobs = data_split(TRAIN_GRAPHS, world_size)
 
     mp.spawn(proc_job,
-        args=(world_size,TRAIN_GRAPHS,jobs),
+        args=(world_size,TRAIN_GRAPHS,jobs,13),
         nprocs=world_size,
         join=True)
 

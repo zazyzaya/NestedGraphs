@@ -44,18 +44,21 @@ class NodeGeneratorTopology(NodeGenerator):
 
 
 class GATDiscriminator(nn.Module):
-    def __init__(self, emb_feats, in_feats, hidden_feats):
+    def __init__(self, emb_feats, hidden_feats, heads=8):
         super().__init__()
 
-        self.gat1 = GATConv(in_feats+emb_feats, hidden_feats, heads=3, concat=False)
-        self.gat2 = GATConv(hidden_feats, hidden_feats, heads=3)
-        self.lin = nn.Linear(hidden_feats*3, 1)
+        self.gat1 = GATConv(emb_feats, hidden_feats, heads=heads)
+        self.gat2 = GATConv(hidden_feats*heads, hidden_feats, heads=heads)
+        self.lin = nn.Linear(hidden_feats*heads, 1)
 
 
     def forward(self, z, graph):
-        x = torch.cat([z,graph.x], dim=1)
-        x = torch.rrelu(self.gat1(x, graph.edge_index))
-        x = torch.rrelu(self.gat2(x, graph.edge_index))
+        #x = torch.cat([z,graph.x], dim=1)
+        # Experiments showed the graph node feats are unimportant
+        # saves a bit of time, and shrinks the model a touch
+
+        x = torch.tanh(self.gat1(z, graph.edge_index))
+        x = torch.tanh(self.gat2(x, graph.edge_index))
         
         # Sigmoid applied later. Using BCE loss w Logits
         return self.lin(x)
