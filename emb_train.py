@@ -18,7 +18,7 @@ N_JOBS = 4 # How many worker processes will train the model
 P_THREADS = 4 # About the point of diminishing returns from experiments
 
 criterion = BCEWithLogitsLoss()
-EMBED_SIZE = 32
+EMBED_SIZE = 64
 TRUE_VAL = 0.1 # Discourage every negative sample being -9999999
 FALSE_VAL = 0.9 # False should approach 1 as in an anomaly score
 
@@ -109,7 +109,7 @@ def proc_job(rank, world_size, all_graphs, jobs, val, epochs=250):
         my_nodes[0].file_dim, 
         my_nodes[0].reg_dim,
         my_nodes[0].mod_dim, 
-        16, 8, EMBED_SIZE
+        32, 16, EMBED_SIZE
     )
     gen = NodeGen(my_graphs[0].x.size(1), 32, 64, EMBED_SIZE)
     disc = GATDiscriminator(EMBED_SIZE, 16, heads=16)
@@ -126,67 +126,82 @@ def proc_job(rank, world_size, all_graphs, jobs, val, epochs=250):
     
     best = float('inf')
     num_samples = len(my_graphs)
+    early_stop = False
     for e in range(epochs):
+        # Break in validatation section only gets out 
+        # of inner the loop; update this variable to 
+        # fully break
+        if early_stop:
+            break 
+
         for i in range(num_samples):
             st = time.time() 
+            
+            emb.train()
+            gen.train() 
+            disc.train()
 
             d_loss,g_loss = train_step(
                 my_nodes[i], my_graphs[i],
                 emb, gen, disc,
                 e_opt, g_opt, d_opt
             ) 
-
-            # Only step after all data is processed
-            # this acts as a barrier to prevent workers with 
-            # fewer graphs from processing them more often    
+   
             if rank == 0:
                 print(
                     "[%d-%d] Disc: %0.4f, Gen: %0.4f (%0.2fs)" 
                     % (e, i, d_loss, g_loss, time.time()-st)
                 )
 
-        # Validation step 
-        with torch.no_grad():
-            disc.eval()
-            gen.eval()
-            
-            data = sample(val_nodes)
-            
-            embs = emb.forward(data)
-            t_preds = disc.forward(embs, val_graph)
-            
-            fake = gen.forward(val_graph)
-            f_preds = disc.forward(fake, val_graph)
+            # Validation step 
+            with torch.no_grad():
+                emb.eval()
+                disc.eval()
+                gen.eval()
+                
+                data = sample(val_nodes)
+                
+                embs = emb.forward(data)
+                t_preds = disc.forward(embs, val_graph)
+                
+                fake = gen.forward(val_graph)
+                f_preds = disc.forward(fake, val_graph)
 
-            preds = torch.cat([t_preds, f_preds], dim=1)
-            labels = torch.cat([
-                torch.full(t_preds.size(), TRUE_VAL),
-                torch.full(f_preds.size(), FALSE_VAL)
-            ], dim=1)
+                preds = torch.cat([t_preds, f_preds], dim=1)
+                labels = torch.cat([
+                    torch.full(t_preds.size(), TRUE_VAL),
+                    torch.full(f_preds.size(), FALSE_VAL)
+                ], dim=1)
 
-            val_loss = criterion(preds, labels)
+                val_loss = criterion(preds, labels)
 
-        # Synchronize value across all machines
-        dist.all_reduce(val_loss)
-        print("Validation loss: %0.4f" % (val_loss.item()/world_size), end='')
-
-        if val_loss < best:
-            print("*")
-            best = val_loss 
-            no_improvement = 0
+            # Synchronize value across all machines
+            dist.all_reduce(val_loss)
 
             if rank == 0:
-                torch.save(disc.module, 'saved_models/embedder/disc.pkl')
-                torch.save(gen.module, 'saved_models/embedder/gen.pkl')
-                torch.save(emb.module, 'saved_models/embedder/emb.pkl')
+                print("Validation loss: %0.4f" % (val_loss.item()/world_size), end='')
 
-        else:
-            print()
-            no_improvement += 1
-            if no_improvement > PATIENCE:
+            if val_loss < best:
+                best = val_loss 
+                no_improvement = 0
+
                 if rank == 0:
-                    print("Early stopping!")
-                break     
+                    print("*")
+                    torch.save(disc.module, 'saved_models/embedder/disc.pkl')
+                    torch.save(gen.module, 'saved_models/embedder/gen.pkl')
+                    torch.save(emb.module, 'saved_models/embedder/emb.pkl')
+
+            else:
+                no_improvement += 1
+                if rank == 0:
+                    print() 
+
+                if no_improvement > PATIENCE:
+                    if rank == 0:
+                        print("Early stopping!")
+                    
+                    early_stop = True
+                    break     
             
         dist.barrier()
 

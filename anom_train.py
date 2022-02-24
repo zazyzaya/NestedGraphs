@@ -10,35 +10,26 @@ import torch.distributed.rpc as rpc
 import torch.multiprocessing as mp
 from torch.nn import BCEWithLogitsLoss
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.optim import Adam 
+from torch.optim import Adam
 
-from emb_train import EMBED_SIZE
-from models.anom_gan import NodeGeneratorTopology, NodeGenerator,\
-    GATDiscriminator, GCNDiscriminator, DualGCNDiscriminator,\
-    DualGATDiscriminator
+EMBED_SIZE = 64
 
 N_JOBS = 4 # How many worker processes will train the model
 P_THREADS = 4 # About the point of diminishing returns from experiments
 
 criterion = BCEWithLogitsLoss()
-TRUE_VAL = 0.01
-FALSE_VAL = 0.99
+TRUE_VAL = 0.1
+FALSE_VAL = 0.9
 
+# Just need it to keep going a few epochs
+# Too long and it overfits
+EPOCHS = 3
 SKIP_GEN = 1
 WARMUP = -1
-PATIENCE = 100
+PATIENCE = 2
 
-G_HIDDEN_DIM = 128
-NOISE_DIM = 128
-
-LR=0.001
-HIDDEN_DIM = 32
-KWARGS = {
-    'heads': 8
-}
-
-Disc = GATDiscriminator
-Gen = NodeGenerator
+LR=0.01
+G_LR=0.01
 
 def disc_step(embs, graph, disc, gen):
     # Positive samples & train embedder
@@ -76,7 +67,7 @@ def data_split(graphs, workers):
 
     return jobs
 
-def proc_job(rank, world_size, all_graphs, jobs, val, epochs=250):
+def proc_job(rank, world_size, all_graphs, jobs, val):
     # DDP info
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = '42069'
@@ -89,16 +80,16 @@ def proc_job(rank, world_size, all_graphs, jobs, val, epochs=250):
     for gid in range(jobs[rank], jobs[rank+1]):
         with open(DATA_HOME + 'graph%d.pkl' % all_graphs[gid], 'rb') as f:
             my_graphs.append(pickle.load(f))
-        with open(DATA_HOME + 'emb%d.pkl' % all_graphs[gid], 'rb') as f:
+        with open(DATA_HOME + 'emb%d_%d.pkl' % (all_graphs[gid], EMBED_SIZE), 'rb') as f:
             my_embs.append(pickle.load(f))
 
     with open(DATA_HOME + 'graph%d.pkl' % (val+rank), 'rb') as f:
         val_graph = pickle.load(f)
-    with open(DATA_HOME + 'emb%d.pkl' % (val+rank), 'rb') as f:
+    with open(DATA_HOME + 'emb%d_%d.pkl' % (val+rank, EMBED_SIZE), 'rb') as f:
         val_emb = pickle.load(f)
 
-    gen = Gen(my_graphs[0].x.size(1), NOISE_DIM, G_HIDDEN_DIM, EMBED_SIZE)
-    disc = Disc(EMBED_SIZE, my_graphs[0].x.size(1), HIDDEN_DIM, **KWARGS)
+    gen = torch.load('saved_models/embedder/gen_%d.pkl' % EMBED_SIZE) 
+    disc = torch.load('saved_models/embedder/disc_%d.pkl' % EMBED_SIZE) 
 
     # Initialize shared models
     gen = DDP(gen)
@@ -106,18 +97,18 @@ def proc_job(rank, world_size, all_graphs, jobs, val, epochs=250):
 
     # Initialize optimizers
     d_opt = Adam(disc.parameters(), lr=LR)
-    g_opt = Adam(gen.parameters(), lr=0.01)
+    g_opt = Adam(gen.parameters(), lr=G_LR)
     
     num_samples = len(my_graphs)
 
     best = float('inf')
     no_improvement = 0 
 
-    for e in range(epochs):
+    for e in range(EPOCHS):
         st = time.time()
         
         disc.train()
-        gen.train()
+        gen.eval()
 
         # Train disc every time
         d_opt.zero_grad()
@@ -130,6 +121,9 @@ def proc_job(rank, world_size, all_graphs, jobs, val, epochs=250):
 
         d_opt.step() 
         d_loss_num /= num_samples
+
+        gen.train()
+        disc.eval()
 
         # Only train gen every few epochs to let disc catch up
         g_opt.zero_grad()
@@ -156,7 +150,8 @@ def proc_job(rank, world_size, all_graphs, jobs, val, epochs=250):
         if rank == 0:
             print(
                 '[%d] Disc Loss: %0.4f  Gen Loss: %0.4f  Val Loss: %0.4f (%0.2f)' % 
-                (e, d_loss_num, g_loss_num, val_loss.item(), time.time()-st)
+                (e, d_loss_num, g_loss_num, val_loss.item(), time.time()-st),
+                end=''
             )
 
         if val_loss < best or e < WARMUP:
@@ -164,11 +159,16 @@ def proc_job(rank, world_size, all_graphs, jobs, val, epochs=250):
             no_improvement = 0
 
             if rank == 0:
-                torch.save(disc.module, 'saved_models/detector/disc.pkl')
-                torch.save(gen.module, 'saved_models/detector/gen.pkl')
+                print("*")
+                torch.save(disc.module, 'saved_models/detector/disc_%d.pkl' % EMBED_SIZE)
+                torch.save(gen.module, 'saved_models/detector/gen_%d.pkl' % EMBED_SIZE)
 
         else:
             no_improvement += 1
+
+            if rank == 0:
+                print()
+
             if no_improvement > PATIENCE:
                 if rank == 0:
                     print("Early stopping!")

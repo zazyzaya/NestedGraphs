@@ -55,9 +55,20 @@ class GATDiscriminator(nn.Module):
 
 
     def forward(self, z, graph):
-        #x = torch.cat([z,graph.x], dim=1)
-        #x = torch.rrelu(self.lin1(x))
         x = torch.tanh(self.gnn1(z, graph.edge_index))
+        x = torch.tanh(self.gnn2(x, graph.edge_index))
+        
+        # Sigmoid applied later. Using BCE loss w Logits
+        return self.lin(x)
+
+class GATFeatDiscriminator(GATDiscriminator):
+    def __init__(self, emb_feats, in_feats, hidden_feats, heads=8):
+        super().__init__(emb_feats, in_feats, hidden_feats, heads)
+        self.gnn1 = GATConv(emb_feats+in_feats, hidden_feats, heads=heads)
+
+    def forward(self, z, graph):
+        x = torch.cat([z,graph.x], dim=1)
+        x = torch.tanh(self.gnn1(x, graph.edge_index))
         x = torch.tanh(self.gnn2(x, graph.edge_index))
         
         # Sigmoid applied later. Using BCE loss w Logits
@@ -67,10 +78,29 @@ class GCNDiscriminator(GATDiscriminator):
     def __init__(self, emb_feats, in_feats, hidden_feats, **kwargs):
         super().__init__(emb_feats, in_feats, hidden_feats)
 
-        self.gnn1 = GCNConv(in_feats, hidden_feats)
+        self.gnn1 = GCNConv(emb_feats, hidden_feats)
         self.gnn2 = GCNConv(hidden_feats, hidden_feats)
         self.lin = nn.Linear(hidden_feats, 1)
 
+class GCNFeatDiscriminator(GATFeatDiscriminator):
+    def __init__(self, emb_feats, in_feats, hidden_feats, **kwargs):
+        super().__init__(emb_feats, in_feats, hidden_feats, **kwargs)
+        self.gnn1 = GCNConv(emb_feats+in_feats, hidden_feats)
+        self.gnn2 = GCNConv(hidden_feats, hidden_feats)
+        self.lin = nn.Linear(hidden_feats, 1)
+
+class GATFeatDiscriminator(GATDiscriminator):
+    def __init__(self, emb_feats, in_feats, hidden_feats, heads=8):
+        super().__init__(emb_feats, in_feats, hidden_feats, heads)
+        self.gnn1 = GATConv(emb_feats+in_feats, hidden_feats, heads=heads)
+
+    def forward(self, z, graph):
+        x = torch.cat([z,graph.x], dim=1)
+        x = torch.tanh(self.gnn1(x, graph.edge_index))
+        x = torch.tanh(self.gnn2(x, graph.edge_index))
+        
+        # Sigmoid applied later. Using BCE loss w Logits
+        return self.lin(x)
 
 class DualGCNDiscriminator(nn.Module):
     def __init__(self, emb_feats, in_feats, hidden_feats, **kwargs):

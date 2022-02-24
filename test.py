@@ -52,9 +52,12 @@ def test_emb(nodes, graph, model, model_path=HOME+'saved_models/'):
     labels = propogate_labels(graph,nodes)
     
     emb = torch.load(model_path+'embedder/emb%s.pkl' % model)
-    desc = torch.load(model_path+'embedder/desc%s.pkl' % model)
+    desc = torch.load(model_path+'embedder/disc%s.pkl' % model)
 
     with torch.no_grad():
+        emb.eval()
+        desc.eval()
+
         data = sample(nodes)
         zs = emb(data, graph)
         preds = desc(zs, graph)
@@ -82,11 +85,11 @@ def test_emb(nodes, graph, model, model_path=HOME+'saved_models/'):
         print()
         print(aucap,end='')
 
-def test_det(embs, nodes, graph, model, model_path=HOME+'saved_models/'):
+def test_det(embs, nodes, graph, model, dim, model_path=HOME+'saved_models/'):
     inv_map = {v:k for k,v in nodes.node_map.items()}
     labels = propogate_labels(graph,nodes)
     
-    disc = torch.load(model_path+'detector/disc%s.pkl' % model)
+    disc = torch.load(model_path+'detector/disc%s_%d.pkl' % (model,dim))
 
     with torch.no_grad():
         disc.eval()
@@ -133,6 +136,10 @@ if __name__ == '__main__':
         '--embedder',
         action='store_true'
     )
+    parser.add_argument(
+        '--dim', '-d',
+        type=int, default=64
+    )
     args = parser.parse_args()
 
     print("Testing host %04d with %s model" % (args.hostname, args.model))
@@ -140,10 +147,10 @@ if __name__ == '__main__':
         graph = pickle.load(f)
     with open(HOME+'inputs/mal/nodes%d.pkl' % args.hostname, 'rb') as f:
         nodes = pickle.load(f)
-    with open(HOME+'inputs/mal/emb%d.pkl' % args.hostname, 'rb') as f:
+    with open(HOME+'inputs/mal/emb%d_%d.pkl' % (args.hostname, args.dim), 'rb') as f:
         embs = pickle.load(f)
 
     if args.embedder:
         test_emb(nodes, graph, args.model)
     else:
-        test_det(embs, nodes, graph, args.model)
+        test_det(embs, nodes, graph, args.model, args.dim)
