@@ -9,7 +9,7 @@ from emb_train import sample
 strip_gid = lambda x : x[19:].split('.')[0]
 strip_gid_mal = lambda x : x[16:].split('.')[0]
 
-
+'''
 model = torch.load('saved_models/embedder/emb_final.pt')
 model.eval() 
 
@@ -38,8 +38,8 @@ for fname in tqdm(glob.glob('inputs/mal/nodes*.pkl')):
 
     with open('inputs/mal/emb%s_32.pkl' % gid, 'wb+') as f:
         pickle.dump(zs, f)
-
-model = torch.load('saved_models/embedder/emb_dim64.pt')
+'''
+model = torch.load('saved_models/embedder/emb_64.pt')
 model.eval() 
 
 print("Embedding 64 dim benign hosts")

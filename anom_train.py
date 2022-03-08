@@ -12,6 +12,9 @@ from torch.nn import BCEWithLogitsLoss
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import Adam
 
+from models.utils import reset_all_weights, kld_gauss
+from models.emb_gan import NodeGeneratorCovar, NodeGeneratorCorrected
+
 EMBED_SIZE = 64
 
 N_JOBS = 4 # How many worker processes will train the model
@@ -23,10 +26,9 @@ FALSE_VAL = 0.9
 
 # Just need it to keep going a few epochs
 # Too long and it overfits
-EPOCHS = 3
+EPOCHS = 1000
 SKIP_GEN = 1
-WARMUP = -1
-PATIENCE = 2
+PATIENCE = 25
 
 LR=0.01
 G_LR=0.01
@@ -50,10 +52,16 @@ def disc_step(embs, graph, disc, gen):
     return criterion(preds, labels)
 
 def gen_step(embs, graph, disc, gen):
-    fake = gen(graph)
+    if gen.training:
+        fake,mean,std = gen(graph)
+        kld = kld_gauss(mean, std)
+    else:
+        fake = gen(graph)
+        kld = 0
+    
     preds = disc.forward(fake, graph)
-    return criterion(preds, torch.full((graph.num_nodes,1), TRUE_VAL))
 
+    return criterion(preds, torch.full((graph.num_nodes,1), TRUE_VAL)) + kld
 
 def data_split(graphs, workers):
     min_jobs = [len(graphs) // workers] * workers
@@ -91,6 +99,9 @@ def proc_job(rank, world_size, all_graphs, jobs, val):
     gen = torch.load('saved_models/embedder/gen_%d.pkl' % EMBED_SIZE) 
     disc = torch.load('saved_models/embedder/disc_%d.pkl' % EMBED_SIZE) 
 
+    #reset_all_weights(gen)
+    #reset_all_weights(disc)
+
     # Initialize shared models
     gen = DDP(gen)
     disc = DDP(disc)
@@ -101,7 +112,7 @@ def proc_job(rank, world_size, all_graphs, jobs, val):
     
     num_samples = len(my_graphs)
 
-    best = float('inf')
+    best = (float('inf'), float('inf'))
     no_improvement = 0 
 
     for e in range(EPOCHS):
@@ -142,38 +153,64 @@ def proc_job(rank, world_size, all_graphs, jobs, val):
         with torch.no_grad():
             disc.eval()
             gen.eval()
-            val_loss = disc_step(val_emb, val_graph, disc, gen)
+            g_val_loss = gen_step(val_emb, val_graph, disc, gen)
+            d_val_loss = disc_step(val_emb, val_graph, disc, gen)
 
         # Synchronize value across all machines
-        dist.all_reduce(val_loss)
+        dist.all_reduce(g_val_loss)
+        dist.all_reduce(d_val_loss)
 
         if rank == 0:
             print(
-                '[%d] Disc Loss: %0.4f  Gen Loss: %0.4f  Val Loss: %0.4f (%0.2f)' % 
-                (e, d_loss_num, g_loss_num, val_loss.item(), time.time()-st),
-                end=''
+                '[%d] Disc Loss: %0.4f  Gen Loss: %0.4f (%0.2f)' % 
+                (e, d_loss_num, g_loss_num, time.time()-st),
             )
 
-        if val_loss < best or e < WARMUP:
-            best = val_loss 
+        improved = False 
+
+        if rank == 0:
+            print("Val loss\t D: %0.4f" % d_val_loss.item(), end='')
+        
+        if d_val_loss < best[0]:
+            best = (d_val_loss, best[1])
             no_improvement = 0
+            improved = True 
 
             if rank == 0:
-                print("*")
                 torch.save(disc.module, 'saved_models/detector/disc_%d.pkl' % EMBED_SIZE)
                 torch.save(gen.module, 'saved_models/detector/gen_%d.pkl' % EMBED_SIZE)
+                print("* ", end='')
+        else: 
+            if rank == 0: 
+                print("  ", end='')
 
-        else:
-            no_improvement += 1
+        if rank == 0:
+            print("G: %0.4f" % g_val_loss.item(), end='')
+
+        dist.barrier()
+        if g_val_loss < best[1]:
+            best = (best[0], g_val_loss)
+            no_improvement = 0 
+            improved = True 
 
             if rank == 0:
+                torch.save(gen.module, 'saved_models/detector/gen_%d.pkl' % EMBED_SIZE)
+                print("*")
+        else:
+            if rank == 0:
                 print()
+
+        dist.barrier()
+        if not improved:
+            no_improvement += 1
 
             if no_improvement > PATIENCE:
                 if rank == 0:
                     print("Early stopping!")
                 break            
 
+        if rank == 0:
+            torch.save(disc.module, 'saved_models/detector/disc_checkpoint_%d.pkl' % EMBED_SIZE)
         dist.barrier()
 
     dist.barrier()
@@ -181,14 +218,14 @@ def proc_job(rank, world_size, all_graphs, jobs, val):
         dist.destroy_process_group()
 
 
-TRAIN_GRAPHS = [i for i in range(1,13)]
+TRAIN_GRAPHS = [i for i in range(1,21)]
 DATA_HOME = 'inputs/benign/'
 def main():
     world_size = min(N_JOBS, len(TRAIN_GRAPHS))
     jobs = data_split(TRAIN_GRAPHS, world_size)
 
     mp.spawn(proc_job,
-        args=(world_size,TRAIN_GRAPHS,jobs,13),
+        args=(world_size,TRAIN_GRAPHS,jobs,21),
         nprocs=world_size,
         join=True)
 

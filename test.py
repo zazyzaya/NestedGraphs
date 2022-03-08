@@ -6,6 +6,7 @@ import torch
 import datetime as dt
 from zoneinfo import ZoneInfo
 from sklearn.metrics import average_precision_score as ap, roc_auc_score as auc
+from torch.distributions import Normal
 
 from graph_utils import propogate_labels
 
@@ -47,12 +48,12 @@ def test_no_labels(nodes, graph, model_path=HOME+'saved_models/'):
             f.write(outstr)
             print(outstr, end='')
 
-def test_emb(nodes, graph, model, model_path=HOME+'saved_models/'):
+def test_emb(nodes, graph, model, dim, model_path=HOME+'saved_models/'):
     inv_map = {v:k for k,v in nodes.node_map.items()}
     labels = propogate_labels(graph,nodes)
     
-    emb = torch.load(model_path+'embedder/emb%s.pkl' % model)
-    desc = torch.load(model_path+'embedder/disc%s.pkl' % model)
+    emb = torch.load(model_path+'embedder/emb%s_%d.pkl' % (model, dim))
+    desc = torch.load(model_path+'embedder/disc%s_%d.pkl' % (model, dim))
 
     with torch.no_grad():
         emb.eval()
@@ -101,13 +102,9 @@ def test_det(embs, nodes, graph, model, dim, model_path=HOME+'saved_models/'):
     auc_score = auc(labels.clamp(0,1), vals)
     ap_score = ap(labels.clamp(0,1), vals)
 
-    rev_auc = auc(labels.clamp(0,1), -vals)
-    rev_ap = ap(labels.clamp(0,1), -vals)
-
     with open(HOME+"predictions/detector/preds%d%s.csv" % (graph.gid, model), 'w+') as f:
         aucap = "AUC: %f\tAP: %f\n" % (auc_score, ap_score)
-        rev_aucap = "AUC': %f\tAP': %f\n" % (rev_auc, rev_ap)
-        f.write(aucap + rev_aucap + '\n')
+        f.write(aucap + '\n')
 
         for i in range(vals.size(0)):
             outstr = '%s\t%f\t%0.1f\n' % (
@@ -120,7 +117,69 @@ def test_det(embs, nodes, graph, model, dim, model_path=HOME+'saved_models/'):
             print(outstr, end='')
         
         print()
-        print(aucap+rev_aucap,end='')
+        print(aucap,end='')
+
+def test_gen(embs, nodes, graph, model, dim, model_path=HOME+'saved_models/detector/'):
+    inv_map = {v:k for k,v in nodes.node_map.items()}
+    labels = propogate_labels(graph,nodes)
+    
+    gen = torch.load(model_path+'gen%s_%d.pkl' % (model,dim))
+
+    with torch.no_grad():
+        gen.eval()
+        mean, std = gen.get_distros(graph)
+        mean_dist = (embs-mean)
+
+        # f(x; mu, std) = exp{ -1/2 (x-mu).T Cov^-1 (x-mu)}
+        #                   ------------------------------
+        #                       sqrt{ (2pi)^k ||Cov|| }
+        #
+        # Note that we use naiive covariance, so these are diagonal mats
+        # of std vectors. Inverse is just Diag(1/std) and determinant is Trace(std)
+
+        # Dot product of each sample with itself
+        if std.dim() == 2:
+            unnorm_dist = (mean_dist/std).unsqueeze(1) @ mean_dist.unsqueeze(-1)
+            mahalanobis = -0.5 * unnorm_dist.squeeze(-1)
+            dividend = mahalanobis.exp().squeeze(-1)
+
+        # Using covariance matrix
+        else:
+            dividend = (-0.5 * (mean_dist.unsqueeze(1) @ torch.inverse(std) @ mean_dist.unsqueeze(-1))).exp()
+            dividend = dividend.squeeze(-1)
+            print(dividend.max(), dividend.min())
+            
+        k = mean.size(1)
+        divisor = (2*torch.pi ** k) ** (1/2) * std.prod(dim=1)
+        
+        preds = dividend / (divisor + 1e-6)
+
+    vals, idx = torch.sort(1-preds.squeeze(-1), descending=True)
+    labels = labels[idx]
+    
+    print(divisor)
+    print(vals.max(), vals.min())
+
+    auc_score = auc(labels.clamp(0,1), vals)
+    ap_score = ap(labels.clamp(0,1), vals)
+
+    with open(HOME+"predictions/detector/preds%d%s.csv" % (graph.gid, model), 'w+') as f:
+        aucap = "AUC: %f\tAP: %f\n" % (auc_score, ap_score)
+        f.write(aucap + '\n')
+
+        for i in range(vals.size(0)):
+            outstr = '%s\t%f\t%0.1f\n' % (
+                inv_map[idx[i].item()],
+                vals[i],
+                labels[i]
+            )
+
+            f.write(outstr)
+            print(outstr, end='')
+        
+        print()
+        print(aucap,end='')
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -134,6 +193,10 @@ if __name__ == '__main__':
     )
     parser.add_argument(
         '--embedder',
+        action='store_true'
+    )
+    parser.add_argument(
+        '--generator', 
         action='store_true'
     )
     parser.add_argument(
@@ -151,6 +214,12 @@ if __name__ == '__main__':
         embs = pickle.load(f)
 
     if args.embedder:
-        test_emb(nodes, graph, args.model)
+        if args.generator:
+            test_gen(embs, nodes, graph, args.model, args.dim, model_path=HOME+'saved_models/embedder/')
+        else:
+            test_emb(nodes, graph, args.model, args.dim)
+    elif args.generator:
+        test_gen(embs, nodes, graph, args.model, args.dim)
     else:
         test_det(embs, nodes, graph, args.model, args.dim)
+

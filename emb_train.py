@@ -12,21 +12,23 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import Adam
 
 from models.hostlevel import NodeEmbedderRNN, NodeEmbedderSelfAttention, NodeEmbedderAggr, NodeEmbedderSelfAttnTopology
-from models.emb_gan import NodeGenerator, GATDiscriminator, NodeGeneratorTopology
+from models.emb_gan import NodeGenerator, NodeGeneratorCorrected, GATDiscriminator, NodeGeneratorTopology
+from models.utils import kld_gauss
 
 N_JOBS = 4 # How many worker processes will train the model
 P_THREADS = 4 # About the point of diminishing returns from experiments
 
 criterion = BCEWithLogitsLoss()
 EMBED_SIZE = 64
+HIDDEN_GEN = 128
 TRUE_VAL = 0.1 # Discourage every negative sample being -9999999
 FALSE_VAL = 0.9 # False should approach 1 as in an anomaly score
 
-PATIENCE = 25
+PATIENCE = 75
 
 # Decide which embedder to use here
 NodeEmb = NodeEmbedderSelfAttention
-NodeGen = NodeGenerator
+NodeGen = NodeGeneratorCorrected
 
 def sample(nodes):
     return {
@@ -40,6 +42,12 @@ def train_step(nodes, graph, emb, gen, disc, e_opt, g_opt, d_opt):
     # Positive samples & train embedder
     d_opt.zero_grad()
     e_opt.zero_grad()
+    
+    # Improve stability
+    emb.train()
+    disc.train()
+    gen.eval()
+
     embs = emb.forward(data)
     t_preds = disc.forward(embs, graph)
 
@@ -62,9 +70,16 @@ def train_step(nodes, graph, emb, gen, disc, e_opt, g_opt, d_opt):
 
     # Train generator
     g_opt.zero_grad()
-    fake = gen(graph)
+    emb.eval()
+    disc.eval()
+    gen.train()
+
+    fake, mu, std = gen(graph)
+    
     preds = disc.forward(fake, graph)
     g_loss = criterion(preds, torch.full((graph.num_nodes,1), TRUE_VAL))
+    g_loss += kld_gauss(mu,std)
+
     g_loss.backward()
     g_opt.step()
     print("Gen Step")
@@ -111,7 +126,7 @@ def proc_job(rank, world_size, all_graphs, jobs, val, epochs=250):
         my_nodes[0].mod_dim, 
         32, 16, EMBED_SIZE
     )
-    gen = NodeGen(my_graphs[0].x.size(1), 32, 64, EMBED_SIZE)
+    gen = NodeGen(my_graphs[0].x.size(1), 32, HIDDEN_GEN, EMBED_SIZE)
     disc = GATDiscriminator(EMBED_SIZE, 16, heads=16)
 
     # Initialize shared models
@@ -203,7 +218,7 @@ def proc_job(rank, world_size, all_graphs, jobs, val, epochs=250):
                     early_stop = True
                     break     
             
-        dist.barrier()
+            dist.barrier()
 
     dist.barrier()
     
