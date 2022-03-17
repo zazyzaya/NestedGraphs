@@ -138,27 +138,17 @@ def test_gen(embs, nodes, graph, model, dim, model_path=HOME+'saved_models/detec
         # of std vectors. Inverse is just Diag(1/std) and determinant is Trace(std)
 
         # Dot product of each sample with itself
-        if std.dim() == 2:
-            unnorm_dist = (mean_dist/std).unsqueeze(1) @ mean_dist.unsqueeze(-1)
-            mahalanobis = -0.5 * unnorm_dist.squeeze(-1)
-            dividend = mahalanobis.exp().squeeze(-1)
-
-        # Using covariance matrix
-        else:
-            dividend = (-0.5 * (mean_dist.unsqueeze(1) @ torch.inverse(std) @ mean_dist.unsqueeze(-1))).exp()
-            dividend = dividend.squeeze(-1)
-            print(dividend.max(), dividend.min())
+        unnorm_dist = (mean_dist/std).unsqueeze(1) @ mean_dist.unsqueeze(-1)
+        mahalanobis = -0.5 * unnorm_dist.squeeze(-1)
+        dividend = mahalanobis.exp().squeeze(-1)
             
         k = mean.size(1)
         divisor = (2*torch.pi ** k) ** (1/2) * std.prod(dim=1)
         
         preds = dividend / (divisor + 1e-6)
 
-    vals, idx = torch.sort(1-preds.squeeze(-1), descending=True)
+    vals, idx = torch.sort(mahalanobis.squeeze(-1), descending=True)
     labels = labels[idx]
-    
-    print(divisor)
-    print(vals.max(), vals.min())
 
     auc_score = auc(labels.clamp(0,1), vals)
     ap_score = ap(labels.clamp(0,1), vals)
@@ -179,6 +169,11 @@ def test_gen(embs, nodes, graph, model, dim, model_path=HOME+'saved_models/detec
         
         print()
         print(aucap,end='')
+
+    print(mahalanobis)
+    print(dividend)
+    print(divisor)
+    print(vals.max(), vals.min())
 
 
 if __name__ == '__main__':
@@ -210,8 +205,12 @@ if __name__ == '__main__':
         graph = pickle.load(f)
     with open(HOME+'inputs/mal/nodes%d.pkl' % args.hostname, 'rb') as f:
         nodes = pickle.load(f)
-    with open(HOME+'inputs/mal/emb%d_%d.pkl' % (args.hostname, args.dim), 'rb') as f:
-        embs = pickle.load(f)
+    
+    if not args.embedder:
+        with open(HOME+'inputs/mal/emb%d_%d.pkl' % (args.hostname, args.dim), 'rb') as f:
+            embs = pickle.load(f)
+    else:
+        embs = None
 
     if args.embedder:
         if args.generator:

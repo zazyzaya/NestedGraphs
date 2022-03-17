@@ -24,7 +24,7 @@ HIDDEN_GEN = 128
 TRUE_VAL = 0.1 # Discourage every negative sample being -9999999
 FALSE_VAL = 0.9 # False should approach 1 as in an anomaly score
 
-PATIENCE = 75
+PATIENCE = 100
 
 # Decide which embedder to use here
 NodeEmb = NodeEmbedderSelfAttention
@@ -99,7 +99,7 @@ def data_split(graphs, workers):
 
     return jobs
 
-def proc_job(rank, world_size, all_graphs, jobs, val, epochs=250):
+def proc_job(rank, world_size, all_graphs, jobs, val, epochs=100):
     # DDP info
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = '42069'

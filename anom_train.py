@@ -21,8 +21,8 @@ N_JOBS = 4 # How many worker processes will train the model
 P_THREADS = 4 # About the point of diminishing returns from experiments
 
 criterion = BCEWithLogitsLoss()
-TRUE_VAL = 0.1
-FALSE_VAL = 0.9
+TRUE_VAL = 0.
+FALSE_VAL = 1.
 
 # Just need it to keep going a few epochs
 # Too long and it overfits

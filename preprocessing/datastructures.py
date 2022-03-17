@@ -147,7 +147,15 @@ class NodeList():
             return torch.zeros(1,self.mod_dim)
 
     def add_node(self, ts, pid):
-        if pid in self.node_map or '-1' in pid:
+        # Some logs are out of order. Make sure it's the most
+        # recent one. 
+        if pid in self.node_map:
+            if self.nodes[self.node_map[pid]].ts > ts:
+                self.nodes[self.node_map[pid]].ts = ts 
+
+            return False
+
+        if '-1' in pid:
             return False
 
         self.node_map[pid] = self.num_nodes 
@@ -187,17 +195,17 @@ class NodeList():
         [n.finalize() for n in self.nodes]
 
 
-    def sample(self, s=None, e=None, batch=[]):
+    def sample(self, batch=[], s=None, e=None, norm_time=True):
         if not len(batch):
             batch = list(range(self.num_nodes))
         
         return {
-            'files': self.sample_feat('files', batch=batch, s=s,e=e),
-            'regs': self.sample_feat('regs', batch=batch, s=s, e=e),
-            'mods': self.sample_feat('mods', batch=batch, s=s, e=e)
+            'files': self.sample_feat('files', batch=batch, s=s, e=e, norm_time=norm_time),
+            'regs': self.sample_feat('regs', batch=batch, s=s, e=e, norm_time=norm_time),
+            'mods': self.sample_feat('mods', batch=batch, s=s, e=e, norm_time=norm_time)
         }
 
-    def sample_feat(self, fn, batch=[], s=None, e=None):
+    def sample_feat(self, fn, batch=[], s=None, e=None, norm_time=True):
         times, feats = [],[]
 
         if not len(batch):
@@ -205,10 +213,15 @@ class NodeList():
 
         for b in batch:
             t,x = self.nodes[b].getter(fn,s,e)
+
+            if norm_time and x.size(0):
+                node_time = self.nodes[b].ts
+            else:
+                node_time = 0
             
             # Avoid errors from empty tensors
             if x.size(0):
-                times.append(t)
+                times.append(t-node_time)
                 feats.append(x)
             else:
                 times.append(torch.zeros(1,1))
@@ -274,4 +287,3 @@ class HostGraph(Data):
         self.x = torch.stack(self.x)
         self.num_nodes = self.x.size(0)
         self.edge_attr = torch.tensor(self.edge_attr)
-        
