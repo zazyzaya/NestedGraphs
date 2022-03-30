@@ -297,7 +297,7 @@ class NodeEmbedderSelfAttention(nn.Module):
         #m = self.m_attn(self.t2v(t), m)
 
         x = torch.cat([f,r], dim=1)
-        return torch.rrelu(self.combo(x))
+        return torch.sigmoid(self.combo(x))
 
 
 class MultiHeadSelfAttn(nn.Module):

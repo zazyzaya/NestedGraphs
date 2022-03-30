@@ -50,12 +50,12 @@ def test_no_labels(nodes, graph, model_path=HOME+'saved_models/'):
             f.write(outstr)
             print(outstr, end='')
 
-def test_emb(nodes, graph, model, dim, model_path=HOME+'saved_models/'):
+def test_emb(nodes, graph, model_str, dim, model_path=HOME+'saved_models/', verbose=True):
     inv_map = {v:k for k,v in nodes.node_map.items()}
     labels = propogate_labels(graph,nodes)
     
-    emb = torch.load(model_path+'embedder/emb%s_%d.pkl' % (model, dim))
-    desc = torch.load(model_path+'embedder/disc%s_%d.pkl' % (model, dim))
+    emb = torch.load(model_path+'embedder/emb%s_%d.pkl' % (model_str, dim))
+    desc = torch.load(model_path+'embedder/disc%s_%d.pkl' % (model_str, dim))
 
     with torch.no_grad():
         emb.eval()
@@ -71,22 +71,25 @@ def test_emb(nodes, graph, model, dim, model_path=HOME+'saved_models/'):
     auc_score = auc(labels.clamp(0,1), vals)
     ap_score = ap(labels.clamp(0,1), vals)
 
-    with open(HOME+"predictions/embedder/preds%d%s.csv" % (graph.gid, model), 'w+') as f:
-        aucap = "AUC: %f\tAP: %f\n" % (auc_score, ap_score)
-        f.write(aucap + '\n')
+    if verbose:
+        with open(HOME+"predictions/embedder/preds%d%s.csv" % (graph.gid, model_str), 'w+') as f:
+            aucap = "AUC: %f\tAP: %f\n" % (auc_score, ap_score)
+            f.write(aucap + '\n')
 
-        for i in range(vals.size(0)):
-            outstr = '%s\t%f\t%0.1f\n' % (
-                inv_map[idx[i].item()],
-                vals[i],
-                labels[i]
-            )
+            for i in range(vals.size(0)):
+                outstr = '%s\t%f\t%0.1f\n' % (
+                    inv_map[idx[i].item()],
+                    vals[i],
+                    labels[i]
+                )
 
-            f.write(outstr)
-            print(outstr, end='')
-        
-        print()
-        print(aucap,end='')
+                f.write(outstr)
+                print(outstr, end='')
+            
+            print()
+            print(aucap,end='')
+
+    return auc_score, ap_score
 
 def test_det(embs, nodes, graph, model, dim, model_path=HOME+'saved_models/'):
     inv_map = {v:k for k,v in nodes.node_map.items()}

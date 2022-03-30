@@ -73,6 +73,29 @@ class NodeGeneratorCorrected(nn.Module):
 
         return mu, std
 
+class NodeGeneratorNonVariational(nn.Module):
+    '''
+    The previous model is so successful when not reparameterizing, 
+    I wonder if we even need to make it variational
+    '''
+    def __init__(self, in_feats, _, hidden_feats, out_feats, activation=nn.RReLU) -> None:
+        # Blank argument so signature matches other gens
+        super().__init__()
+
+        self.net = nn.Sequential(
+            nn.Linear(in_feats, hidden_feats),
+            nn.Dropout(0.25, inplace=True),
+            nn.RReLU(),
+            nn.Linear(hidden_feats, hidden_feats),
+            nn.Dropout(0.25, inplace=True),
+            nn.RReLU(),
+            nn.Linear(hidden_feats, out_feats),
+            nn.Sigmoid()
+        )   
+
+    def forward(self, graph):
+        return self.net(graph.x)
+
 class NodeGeneratorCovar(NodeGeneratorCorrected):
     def __init__(self, in_feats, _, hidden_feats, out_feats, activation=nn.RReLU) -> None:
         super().__init__(in_feats, _, hidden_feats, out_feats, activation)
@@ -141,3 +164,11 @@ class GATDiscriminatorTime(GATDiscriminator):
         # saves a bit of time, and shrinks the model a touch
         z = torch.cat([self.t2v(graph.node_times.unsqueeze(-1)), z], dim=1)
         return super().forward(z, graph)
+
+
+class GCNDiscriminator(GATDiscriminator):
+    def __init__(self, emb_feats, hidden_feats, heads=8):
+        super().__init__(emb_feats, hidden_feats, heads)
+        self.gat1 = GCNConv(emb_feats, hidden_feats)
+        self.gat2 = GCNConv(hidden_feats, hidden_feats)
+        self.lin = nn.Linear(hidden_feats, 1)
