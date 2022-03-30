@@ -1,7 +1,8 @@
 import os 
 import pickle
 import sys 
-import time 
+import time
+from numpy import r_ 
 
 import torch 
 import torch.distributed as dist
@@ -11,33 +12,49 @@ from torch.nn import BCEWithLogitsLoss
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import Adam
 
-from models.hostlevel import NodeEmbedderRNN, NodeEmbedderSelfAttention, NodeEmbedderAggr, NodeEmbedderSelfAttnTopology
-from models.emb_gan import NodeGenerator, NodeGeneratorCorrected, GATDiscriminator, NodeGeneratorTopology
+from models.hostlevel import NodeEmbedderSelfAttention, NodeEmbedderMultiSelfAttention
+from models.emb_gan import GATDiscriminatorTime, NodeGeneratorCorrected, GATDiscriminator
 from models.utils import kld_gauss
 
 N_JOBS = 4 # How many worker processes will train the model
 P_THREADS = 4 # About the point of diminishing returns from experiments
 
 criterion = BCEWithLogitsLoss()
+
+# Embedder params
+EMB_HIDDEN = 64
+EMB_OUT = 32
 EMBED_SIZE = 64
+T2V = 8
+ATTN_MECH = 'torch'
+ATTN_KW = {
+    'layers': 2,
+    'heads': 8
+}
+
+# GAN Params
 HIDDEN_GEN = 128
-TRUE_VAL = 0.1 # Discourage every negative sample being -9999999
+TRUE_VAL = 0.0 # One-sided label smoothing
 FALSE_VAL = 0.9 # False should approach 1 as in an anomaly score
 
-PATIENCE = 100
+# Training params
+EMB_LR = 0.0005
+MAX_SAMPLES = 50
+PATIENCE = float('inf')
 
-# Decide which embedder to use here
+# Decide which architecture to use here
 NodeEmb = NodeEmbedderSelfAttention
 NodeGen = NodeGeneratorCorrected
+NodeDisc = GATDiscriminator
 
-def sample(nodes):
+def sample(nodes, max_samples=0):
     return {
-        'regs': nodes.sample_feat('regs'),
-        'files': nodes.sample_feat('files')
+        'regs': nodes.sample_feat('regs', max_samples=max_samples),
+        'files': nodes.sample_feat('files', max_samples=max_samples)
     }
 
 def train_step(nodes, graph, emb, gen, disc, e_opt, g_opt, d_opt):
-    data = sample(nodes)
+    data = sample(nodes, max_samples=MAX_SAMPLES)
 
     # Positive samples & train embedder
     d_opt.zero_grad()
@@ -54,13 +71,18 @@ def train_step(nodes, graph, emb, gen, disc, e_opt, g_opt, d_opt):
     # Negative samples
     fake = gen.forward(graph).detach()
     f_preds = disc.forward(fake, graph)
+
+    # Random samples
+    rand = torch.rand(graph.x.size(0), EMBED_SIZE)
+    r_preds = disc.forward(rand, graph)
     
     # Calculate loss (combine true and false so only need
     # one call to backward)
-    preds = torch.cat([t_preds, f_preds], dim=1)
+    preds = torch.cat([t_preds, f_preds, r_preds], dim=1)
     labels = torch.cat([
         torch.full(t_preds.size(), TRUE_VAL),
-        torch.full(f_preds.size(), FALSE_VAL)
+        torch.full(f_preds.size(), FALSE_VAL),
+        torch.full(r_preds.size(), FALSE_VAL)
     ], dim=1)
 
     d_loss = criterion(preds, labels)
@@ -124,10 +146,14 @@ def proc_job(rank, world_size, all_graphs, jobs, val, epochs=100):
         my_nodes[0].file_dim, 
         my_nodes[0].reg_dim,
         my_nodes[0].mod_dim, 
-        32, 16, EMBED_SIZE
+        EMB_HIDDEN, EMB_OUT,
+        EMBED_SIZE,
+        t2v_dim=T2V,
+        attn=ATTN_MECH,
+        attn_kw=ATTN_KW
     )
     gen = NodeGen(my_graphs[0].x.size(1), 32, HIDDEN_GEN, EMBED_SIZE)
-    disc = GATDiscriminator(EMBED_SIZE, 16, heads=16)
+    disc = NodeDisc(EMBED_SIZE, 16, heads=16)
 
     # Initialize shared models
     gen = DDP(gen)
@@ -135,7 +161,7 @@ def proc_job(rank, world_size, all_graphs, jobs, val, epochs=100):
     disc = DDP(disc)
 
     # Initialize optimizers
-    e_opt = Adam(emb.parameters(), lr=0.01)
+    e_opt = Adam(emb.parameters(), lr=EMB_LR)
     d_opt = Adam(disc.parameters(), lr=0.01)
     g_opt = Adam(gen.parameters(), lr=0.01)
     
@@ -174,7 +200,7 @@ def proc_job(rank, world_size, all_graphs, jobs, val, epochs=100):
                 disc.eval()
                 gen.eval()
                 
-                data = sample(val_nodes)
+                data = sample(val_nodes, max_samples=MAX_SAMPLES)
                 
                 embs = emb.forward(data)
                 t_preds = disc.forward(embs, val_graph)
@@ -190,6 +216,7 @@ def proc_job(rank, world_size, all_graphs, jobs, val, epochs=100):
 
                 val_loss = criterion(preds, labels)
 
+        
             # Synchronize value across all machines
             dist.all_reduce(val_loss)
 
@@ -197,14 +224,16 @@ def proc_job(rank, world_size, all_graphs, jobs, val, epochs=100):
                 print("Validation loss: %0.4f" % (val_loss.item()/world_size), end='')
 
             if val_loss < best:
-                best = val_loss 
+                # Reset counter if pretty close to old best
                 no_improvement = 0
+                best = val_loss
 
+                # But only save the model if it's actually better
                 if rank == 0:
                     print("*")
-                    torch.save(disc.module, 'saved_models/embedder/disc.pkl')
-                    torch.save(gen.module, 'saved_models/embedder/gen.pkl')
-                    torch.save(emb.module, 'saved_models/embedder/emb.pkl')
+                    torch.save(disc.module, 'saved_models/embedder/disc_0.pkl')
+                    torch.save(gen.module, 'saved_models/embedder/gen_0.pkl')
+                    torch.save(emb.module, 'saved_models/embedder/emb_0.pkl')
 
             else:
                 no_improvement += 1
@@ -217,8 +246,16 @@ def proc_job(rank, world_size, all_graphs, jobs, val, epochs=100):
                     
                     early_stop = True
                     break     
-            
-            dist.barrier()
+
+        # So we can check in and see if the validation is really worth it
+        # Always save, just have the filename different so we can differ what
+        # val thought was best, vs. what just training forever looks like
+        if rank == 0:
+            torch.save(disc.module, 'saved_models/embedder/disc_1.pkl')
+            torch.save(gen.module, 'saved_models/embedder/gen_1.pkl')
+            torch.save(emb.module, 'saved_models/embedder/emb_1.pkl')
+
+        dist.barrier()
 
     dist.barrier()
     

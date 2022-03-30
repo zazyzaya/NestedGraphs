@@ -1,8 +1,8 @@
-from turtle import forward
 import torch 
 from torch import nn 
 from torch.nn.parameter import Parameter
 from torch_geometric.nn import GATConv, GCNConv
+from .hostlevel import Time2Vec2d
 
 class NodeGenerator(nn.Module):
     def __init__(self, in_feats, rand_feats, hidden_feats, out_feats, activation=nn.RReLU) -> None:
@@ -128,3 +128,16 @@ class GATDiscriminator(nn.Module):
         
         # Sigmoid applied later. Using BCE loss w Logits
         return self.lin(x)
+
+
+class GATDiscriminatorTime(GATDiscriminator):
+    def __init__(self, emb_feats, hidden_feats, heads=8, t2v_dim=8):
+        super().__init__(emb_feats+t2v_dim, hidden_feats, heads=heads)
+        self.t2v = Time2Vec2d(t2v_dim)
+
+    def forward(self, z, graph):
+        #x = torch.cat([z,graph.x], dim=1)
+        # Experiments showed the graph node feats are unimportant
+        # saves a bit of time, and shrinks the model a touch
+        z = torch.cat([self.t2v(graph.node_times.unsqueeze(-1)), z], dim=1)
+        return super().forward(z, graph)

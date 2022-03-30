@@ -11,6 +11,8 @@ from torch.distributions import Normal
 from graph_utils import propogate_labels
 
 HOME = '/mnt/raid0_24TB/isaiah/code/NestedGraphs/'
+MS = 50 # Surprisingly quite consistant, even with sampling
+torch.set_num_threads(8)
 
 fmt_ts = lambda x : dt.datetime.fromtimestamp(x).astimezone(
     ZoneInfo('Etc/GMT+4')
@@ -18,8 +20,8 @@ fmt_ts = lambda x : dt.datetime.fromtimestamp(x).astimezone(
 
 def sample(nodes):
     return {
-        'regs': nodes.sample_feat('regs'),
-        'files': nodes.sample_feat('files')
+        'regs': nodes.sample_feat('regs', max_samples=MS),
+        'files': nodes.sample_feat('files', max_samples=MS)
     }
 
 def test_no_labels(nodes, graph, model_path=HOME+'saved_models/'):

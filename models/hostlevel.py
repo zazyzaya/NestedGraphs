@@ -27,6 +27,27 @@ class Time2Vec(nn.Module):
         x = torch.cat([x[:, 0].unsqueeze(-1), periodic], dim=1)
         return repack(x, times)
 
+class Time2Vec2d(nn.Module):
+    '''
+    Recreating Time2Vec: Learning a Vector Representation of Time
+        https://arxiv.org/abs/1907.05321
+    
+    Works on Bx1 matrices (not packed sequences)
+    '''
+    def __init__(self, dim, is_sin=True):
+        super().__init__()
+        assert dim > 1, \
+            'Must have at least 1 periodic feature, and 1 linear (dim must be >= 2)'
+        
+        self.lin = nn.Linear(1, dim)
+        self.f = torch.sin if is_sin else torch.cos
+
+    def forward(self, times):
+        x = self.lin(times)
+        periodic = self.f(x[:, 1:])
+        return torch.cat([x[:, 0].unsqueeze(-1), periodic], dim=1)
+        
+
 
 class NodeRNN(nn.Module):
     supported_nets = ['GRU', 'LSTM'] #, 'TRANSFORMER'] TODO
@@ -120,7 +141,7 @@ class KQV_Attention(nn.Module):
             nn.RReLU()
         )
 
-    def forward(self,ts,seq):
+    def forward(self,ts,seq, **kws):
         # Combine time series and features into single packed sequence
         x = packed_cat([ts, seq])
 
@@ -154,24 +175,123 @@ class KQV_Attention(nn.Module):
         attn = masked_softmax(attn, 2)
         return self.out((attn @ v).squeeze(1))
 
+class KQV_Attention_Mean(KQV_Attention):
+    def forward(self,ts,seq, **kws):
+        x = packed_cat([ts,seq])
+
+        v = repack(self.value(x.data), x)
+        k = repack(self.key(x.data), x)
+        q = repack(self.query(x.data), x)
+
+        k = pad_packed_sequence(k, batch_first=True)[0].transpose(1,2)
+        q,sizes = pad_packed_sequence(q, batch_first=True)
+
+        # Mean(AB) = Mean(A)B
+        # Means of Qs
+        q = q.sum(dim=1).div(sizes.unsqueeze(-1)).unsqueeze(1)
+        
+        # Mean attention (the non-linearity in softmax may mess this up)
+        attn = q @ k
+        attn = attn.true_divide(self.scale)
+        attn = masked_softmax(attn, 2)
+
+        v, _ = pad_packed_sequence(v, batch_first=True)
+        return self.out((attn @ v).squeeze(1))
+
+class KQV(nn.Module):
+    def __init__(self, in_feats, out_feats):
+        super().__init__()
+        self.kqv = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.Linear(in_feats, out_feats),
+                    nn.ReLU()
+                )
+            for _ in range(3)
+        ])
+
+    def forward(self, x):
+        return [f(x) for f in self.kqv]
+
+class BuiltinAttention(nn.Module):
+    '''
+    Try using builtin torch nn.Multihead attention function 
+    Because some samples have so many values, iterate through them 
+    as a list and only do one at a time, otherwise will quickly run out
+    of memory 
+    '''
+    def __init__(self, in_feats, hidden, out, heads=8, layers=4):
+        super().__init__() 
+
+        self.layers = layers
+
+        self.kqvs = nn.ModuleList(
+            [KQV(in_feats, hidden)] +   
+            [KQV(hidden, hidden) for _ in range(layers-1)]
+        )
+
+        self.attns = nn.ModuleList(
+            [nn.MultiheadAttention(
+                hidden, heads, dropout=0.25
+            ) for _ in range(layers)]
+        )
+
+        self.project = nn.Sequential(
+            nn.Linear(hidden, out),
+            nn.ReLU()
+        )
+
+    def forward(self, ts, x, batch_size=None):
+        x = packed_cat([ts, x])
+        x,seq_len = pad_packed_sequence(x)
+
+        if batch_size is None:
+            batch_size = x.size(1)
+
+        outs = []
+        for i in range((x.size(0)//batch_size)+1):
+            seq = x[:, i:i+batch_size, :]
+            
+            mask = torch.zeros((seq.size(1), seq.size(0)))
+            for j in range(seq.size(1)):
+                mask[j, seq_len[i+j]:] = 1
+
+            for l in range(self.layers):
+                q,k,v = self.kqvs[l](seq)
+                seq,_ = self.attns[l](q,k,v, key_padding_mask=mask)
+
+            sizes = seq_len[i:i+batch_size]
+            outs.append(seq.sum(dim=0).div(sizes.unsqueeze(-1)))
+        
+        return self.project(torch.cat(outs, dim=0))
 
 class NodeEmbedderSelfAttention(nn.Module):
-    def __init__(self, f_feats, r_feats, m_feats, hidden, out, embed_size, t2v_dim=8):
+    def __init__(self, f_feats, r_feats, m_feats, hidden, out, embed_size, 
+                t2v_dim=8, attn='mean', attn_kw={}):
+
         super().__init__()
 
+        Attn = KQV_Attention_Mean if attn=='mean' else \
+            BuiltinAttention if attn=='torch' else KQV_Attention
+
         self.t2v = Time2Vec(t2v_dim)
-        self.f_attn = KQV_Attention(f_feats+t2v_dim, hidden, out)
-        self.r_attn = KQV_Attention(r_feats+t2v_dim, hidden, out)
+        self.f_attn = Attn(f_feats+t2v_dim, hidden, out, **attn_kw)
+        self.r_attn = Attn(r_feats+t2v_dim, hidden, out, **attn_kw)
         #self.m_attn = KQV_Attention(m_feats+t2v_dim, hidden, out)
 
         self.combo = nn.Linear(out*2, embed_size)
 
-    def forward(self, data, *args):
+    def forward(self, data, *args, **kwargs):
+        if 'batch_size' in kwargs:
+            bs = kwargs['batch_size']
+        else:
+            bs = None
+            
         t,f = data['files']
-        f = self.f_attn(self.t2v(t), f)
+        f = self.f_attn(self.t2v(t), f, batch_size=bs)
 
         t,r = data['regs']
-        r = self.r_attn(self.t2v(t), r)
+        r = self.r_attn(self.t2v(t), r, batch_size=bs)
 
         #t,m = data['mods']
         #m = self.m_attn(self.t2v(t), m)
@@ -180,66 +300,32 @@ class NodeEmbedderSelfAttention(nn.Module):
         return torch.rrelu(self.combo(x))
 
 
-class DeepAggr(nn.Module):
-    def __init__(self, in_feats, hidden, out):
+class MultiHeadSelfAttn(nn.Module):
+    '''
+    Takes way too long
+    '''
+    def __init__(self, in_feats, t_feats, hidden, out, heads):
         super().__init__()
 
-        self.net = nn.Sequential(
-            nn.Linear(in_feats, hidden),
-            nn.RReLU(),
-            nn.Linear(hidden, out),
+        self.heads = nn.ModuleList(
+            [KQV_Attention(in_feats+t_feats, hidden, out) for _ in range(heads)]
+        )
+        self.out_net = nn.Sequential(
+            nn.Linear(in_feats+out*heads, out),
             nn.RReLU()
         )
 
-    def forward(self, ts, feats):
-        x = packed_cat([ts, feats])
-        x = packed_fn(x, self.net)
-        return packed_aggr(x)
+    def forward(self, ts, seq):
+        outs = torch.cat([
+            f(ts, seq) for f in self.heads
+        ] + [get_last_vectors_unpadded(seq)], dim=1)
+        
+        return self.out_net(outs)
 
 
-class NodeEmbedderAggr(nn.Module):
-    def __init__(self, f_feats, r_feats, m_feats, hidden, out, embed_size, t2v_dim=8):
-        super().__init__()
-
-        self.t2v = Time2Vec(t2v_dim)
-        self.f_aggr = DeepAggr(f_feats+t2v_dim, hidden, out)
-        self.r_aggr = DeepAggr(r_feats+t2v_dim, hidden, out)
-        self.m_aggr = DeepAggr(m_feats+t2v_dim, hidden, out)
-
-        self.combo = nn.Linear(out*3, embed_size)
-
-    def forward(self, data, *args):
-        t,f = data['files']
-        f = self.f_aggr(self.t2v(t), f)
-
-        t,r = data['regs']
-        r = self.r_aggr(self.t2v(t), r)
-
-        t,m = data['mods']
-        m = self.m_aggr(self.t2v(t), m)
-
-        x = torch.cat([f,r,m], dim=1)
-        return torch.rrelu(self.combo(x))
-
-
-class NodeEmbedderSelfAttnTopology(NodeEmbedderSelfAttention):
-    def __init__(self, f_feats, r_feats, m_feats, hidden, out, embed_size, t2v_dim=8):
+class NodeEmbedderMultiSelfAttention(NodeEmbedderSelfAttention):
+    def __init__(self, f_feats, r_feats, m_feats, hidden, out, embed_size, t2v_dim=8, heads=3):
         super().__init__(f_feats, r_feats, m_feats, hidden, out, embed_size, t2v_dim)
 
-        self.combo = GCNConv(out*3, hidden)
-        self.combo2 = GCNConv(hidden, embed_size)  
-
-    def forward(self, data, graph):
-        t,f = data['files']
-        f = self.f_attn(self.t2v(t), f)
-
-        t,r = data['regs']
-        r = self.r_attn(self.t2v(t), r)
-
-        t,m = data['mods']
-        m = self.m_attn(self.t2v(t), m)
-
-        # Propogate node data through edges
-        x = torch.cat([f,r,m], dim=1)
-        x = torch.rrelu(self.combo(x, graph.edge_index))
-        return torch.rrelu(self.combo2(x, graph.edge_index))
+        self.f_attn = MultiHeadSelfAttn(f_feats, t2v_dim, hidden, out, heads=heads)
+        self.r_attn = MultiHeadSelfAttn(r_feats, t2v_dim, hidden, out, heads=heads)

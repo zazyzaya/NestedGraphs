@@ -194,18 +194,17 @@ class NodeList():
     def finalize(self):
         [n.finalize() for n in self.nodes]
 
-
-    def sample(self, batch=[], s=None, e=None, norm_time=True):
+    def sample(self, batch=[], s=None, e=None, norm_time=True, max_samples=0):
         if not len(batch):
             batch = list(range(self.num_nodes))
         
         return {
-            'files': self.sample_feat('files', batch=batch, s=s, e=e, norm_time=norm_time),
-            'regs': self.sample_feat('regs', batch=batch, s=s, e=e, norm_time=norm_time),
-            'mods': self.sample_feat('mods', batch=batch, s=s, e=e, norm_time=norm_time)
+            'files': self.sample_feat('files', batch=batch, s=s, e=e, norm_time=norm_time, max_samples=max_samples),
+            'regs': self.sample_feat('regs', batch=batch, s=s, e=e, norm_time=norm_time, max_samples=max_samples),
+            'mods': self.sample_feat('mods', batch=batch, s=s, e=e, norm_time=norm_time, max_samples=max_samples)
         }
 
-    def sample_feat(self, fn, batch=[], s=None, e=None, norm_time=True):
+    def sample_feat(self, fn, batch=[], s=None, e=None, norm_time=True, max_samples=0):
         times, feats = [],[]
 
         if not len(batch):
@@ -215,17 +214,24 @@ class NodeList():
             t,x = self.nodes[b].getter(fn,s,e)
 
             if norm_time and x.size(0):
-                node_time = self.nodes[b].ts
+                node_time = self.nodes[b].ts / 1000
             else:
-                node_time = 0
+                node_time = 0.
             
             # Avoid errors from empty tensors
             if x.size(0):
-                times.append(t-node_time)
-                feats.append(x)
+                if max_samples > 0 and x.size(0) > max_samples:
+                    perm = torch.randperm(x.size(0))[:max_samples]
+                    times.append(t[perm]-node_time)
+                    feats.append(x[perm])
+                else:
+                    times.append(t-node_time)
+                    feats.append(x)
+
             else:
                 times.append(torch.zeros(1,1))
                 feats.append(self.__get_empty(fn))
+
 
         x = pack_sequence(feats, enforce_sorted=False)
         t = pack_sequence(times, enforce_sorted=False)
@@ -246,6 +252,7 @@ class HostGraph(Data):
         self.src, self.dst = [],[] # To be converted to edge_index
         self.edge_attr = []
         self.x = []
+        self.node_times = []
 
         # Turns graph write-only after everything is built
         self.ready = False
@@ -258,6 +265,7 @@ class HostGraph(Data):
 
         if nodelist.add_node(ts, pid):
             self.x.append(feat)
+            self.node_times.append(ts)
 
     def add_edge(self, ts, pid, ppid, feat, pfeat, nodelist):
         assert not self.ready, 'add_edge undefined after self.finalize() has been called'
@@ -287,3 +295,4 @@ class HostGraph(Data):
         self.x = torch.stack(self.x)
         self.num_nodes = self.x.size(0)
         self.edge_attr = torch.tensor(self.edge_attr)
+        self.node_times = torch.tensor(self.node_times)
