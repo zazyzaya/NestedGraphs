@@ -117,7 +117,7 @@ class KQV_Attention(nn.Module):
     attention, and outputs a single vector per list item 
     '''
 
-    def __init__(self, in_dim, hidden, out_dim):
+    def __init__(self, in_dim, hidden, out_dim, **kws):
         super().__init__()
 
         self.key = nn.Sequential(
@@ -274,7 +274,8 @@ class NodeEmbedderSelfAttention(nn.Module):
         Attn = KQV_Attention_Mean if attn=='mean' else \
             BuiltinAttention if attn=='torch' else KQV_Attention
 
-        self.t2v = Time2Vec(t2v_dim)
+        self.f_t2v = Time2Vec(t2v_dim)
+        self.r_t2v = Time2Vec(t2v_dim)
         self.f_attn = Attn(f_feats+t2v_dim, hidden, out, **attn_kw)
         self.r_attn = Attn(r_feats+t2v_dim, hidden, out, **attn_kw)
         #self.m_attn = KQV_Attention(m_feats+t2v_dim, hidden, out)
@@ -288,10 +289,10 @@ class NodeEmbedderSelfAttention(nn.Module):
             bs = None
             
         t,f = data['files']
-        f = self.f_attn(self.t2v(t), f, batch_size=bs)
+        f = self.f_attn(self.f_t2v(t), f, batch_size=bs)
 
         t,r = data['regs']
-        r = self.r_attn(self.t2v(t), r, batch_size=bs)
+        r = self.r_attn(self.r_t2v(t), r, batch_size=bs)
 
         #t,m = data['mods']
         #m = self.m_attn(self.t2v(t), m)

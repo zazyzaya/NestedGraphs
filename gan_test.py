@@ -18,10 +18,10 @@ fmt_ts = lambda x : dt.datetime.fromtimestamp(x).astimezone(
     ZoneInfo('Etc/GMT+4')
 ).isoformat()[11:-6]
 
-def sample(nodes):
+def sample(nodes, max_samples=MS):
     return {
-        'regs': nodes.sample_feat('regs', max_samples=MS),
-        'files': nodes.sample_feat('files', max_samples=MS)
+        'regs': nodes.sample_feat('regs', max_samples=max_samples),
+        'files': nodes.sample_feat('files', max_samples=max_samples)
     }
 
 def test_no_labels(nodes, graph, model_path=HOME+'saved_models/'):
@@ -50,10 +50,11 @@ def test_no_labels(nodes, graph, model_path=HOME+'saved_models/'):
             f.write(outstr)
             print(outstr, end='')
 
-def test_emb(nodes, graph, model_str, dim, model_path=HOME+'saved_models/', verbose=True):
+def test_emb(nodes, graph, model_str, dim, model_path=HOME+'saved_models/', verbose=True, max_samples=None):
     inv_map = {v:k for k,v in nodes.node_map.items()}
     labels = propogate_labels(graph,nodes)
     
+    max_samples = max_samples if max_samples else MS
     emb = torch.load(model_path+'embedder/emb%s_%d.pkl' % (model_str, dim))
     desc = torch.load(model_path+'embedder/disc%s_%d.pkl' % (model_str, dim))
 
@@ -61,8 +62,66 @@ def test_emb(nodes, graph, model_str, dim, model_path=HOME+'saved_models/', verb
         emb.eval()
         desc.eval()
 
-        data = sample(nodes)
+        data = sample(nodes, max_samples=max_samples)
         zs = emb(data, graph)
+        preds = desc(zs, graph)
+
+    vals, idx = torch.sort(preds.squeeze(-1), descending=True)
+    labels = labels[idx]
+
+    auc_score = auc(labels.clamp(0,1), vals)
+    ap_score = ap(labels.clamp(0,1), vals)
+
+    if verbose:
+        with open(HOME+"predictions/embedder/preds%d%s.csv" % (graph.gid, model_str), 'w+') as f:
+            aucap = "AUC: %f\tAP: %f\n" % (auc_score, ap_score)
+            f.write(aucap + '\n')
+
+            for i in range(vals.size(0)):
+                outstr = '%s\t%f\t%0.1f\n' % (
+                    inv_map[idx[i].item()],
+                    vals[i],
+                    labels[i]
+                )
+
+                f.write(outstr)
+                print(outstr, end='')
+            
+            print()
+            print(aucap,end='')
+
+    return auc_score, ap_score
+
+def test_emb_input(zs, nodes, graph, disc):
+    inv_map = {v:k for k,v in nodes.node_map.items()}
+    labels = propogate_labels(graph,nodes)
+    
+    with torch.no_grad():
+        disc.eval()
+        preds = disc(zs, graph)
+
+    vals, idx = torch.sort(preds.squeeze(-1), descending=True)
+    labels = labels[idx]
+
+    auc_score = auc(labels.clamp(0,1), vals)
+    ap_score = ap(labels.clamp(0,1), vals)
+
+    return auc_score, ap_score
+
+def test_gen(nodes, graph, model_str, dim, model_path=HOME+'saved_models/', verbose=True, max_samples=None):
+    inv_map = {v:k for k,v in nodes.node_map.items()}
+    labels = propogate_labels(graph,nodes)
+    
+    max_samples = max_samples if max_samples else MS
+    gen = torch.load(model_path+'embedder/gen%s_%d.pkl' % (model_str, dim))
+    desc = torch.load(model_path+'embedder/disc%s_%d.pkl' % (model_str, dim))
+
+    with torch.no_grad():
+        gen.eval()
+        desc.eval()
+
+        data = sample(nodes, max_samples=max_samples)
+        zs = gen(graph)
         preds = desc(zs, graph)
 
     vals, idx = torch.sort(preds.squeeze(-1), descending=True)
@@ -124,7 +183,7 @@ def test_det(embs, nodes, graph, model, dim, model_path=HOME+'saved_models/'):
         print()
         print(aucap,end='')
 
-def test_gen(embs, nodes, graph, model, dim, model_path=HOME+'saved_models/detector/'):
+def test_variational_gen(embs, nodes, graph, model, dim, model_path=HOME+'saved_models/detector/'):
     inv_map = {v:k for k,v in nodes.node_map.items()}
     labels = propogate_labels(graph,nodes)
     

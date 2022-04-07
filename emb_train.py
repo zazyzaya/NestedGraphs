@@ -13,10 +13,10 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import Adam
 
 from models.hostlevel import NodeEmbedderSelfAttention, NodeEmbedderMultiSelfAttention
-from models.emb_gan import GATDiscriminatorTime, NodeGeneratorCorrected, GATDiscriminator, \
-                            GCNDiscriminator, NodeGeneratorNonVariational
+from models.emb_gan import GATDiscriminator, NodeGeneratorCorrected, GCNDiscriminator, \
+    NodeGeneratorNonVariational, TreeGRUDiscriminator, TreeGRUGenerator
 from models.utils import kld_gauss
-from gan_test import test_emb
+from gan_test import test_emb_input, test_gen
 
 N_JOBS = 4 # How many worker processes will train the model
 P_THREADS = 4 # About the point of diminishing returns from experiments
@@ -25,24 +25,31 @@ criterion = BCEWithLogitsLoss()
 mse = MSELoss()
 
 # Embedder params
-EMB_HIDDEN = 128
+EMB_HIDDEN = 64
 EMB_OUT = 32
 EMBED_SIZE = 64
 T2V = 8
 ATTN_MECH = 'torch'
 ATTN_KW = {
-    'layers': 2,
+    'layers': 4,
     'heads': 8
 }
 
 # GAN Params
 HIDDEN_GEN = 128
+HIDDEN_DISC= 64
+DISC_HEADS = 16 # If using a GAT 
 TRUE_VAL = 0.1 # One-sided label smoothing (real values smoothed)
 FALSE_VAL = 1. # False should approach 1 as in an anomaly score
+STATIC_DIM = 32
 
 # Training params
 EMB_LR = 0.001
+GEN_LR = 0.001
+DISC_LR= 0.001
 MAX_SAMPLES = 50
+ON = 2
+OFF = 3
 
 # Decide which architecture to use here
 NodeEmb = NodeEmbedderSelfAttention
@@ -55,20 +62,60 @@ def sample(nodes, max_samples=0):
         'files': nodes.sample_feat('files', max_samples=max_samples)
     }
 
-def train_step(nodes, graph, emb, gen, disc, e_opt, g_opt, d_opt):
+def get_emb(nodes, emb):
     data = sample(nodes, max_samples=MAX_SAMPLES)
+    emb.eval()
+    with torch.no_grad():
+        zs = emb.forward(data)
 
+    return zs 
+
+def emb_step(data, nodes, graph, emb, gen, disc, e_opt, g_opt, d_opt):
     # Positive samples & train embedder
-    d_opt.zero_grad()
     e_opt.zero_grad()
     
     # Improve stability
     emb.train()
+    disc.eval()
+
+    # Positive samples
+    embs = emb.forward(data)
+    t_preds = disc.forward(embs, graph)
+    
+    labels = torch.full(t_preds.size(), TRUE_VAL)
+    loss = criterion(t_preds, labels)
+
+    loss.backward()
+    e_opt.step()
+
+    return loss
+
+def gen_step(z, data, nodes, graph, emb, gen, disc, e_opt, g_opt, d_opt):
+    g_opt.zero_grad()
+    
+    emb.eval()
+    disc.eval()
+    gen.train()
+
+    fake = gen(graph)
+    g_loss = mse(fake, z)
+
+    g_loss.backward()
+    g_opt.step()
+    
+    return g_loss
+
+def disc_step(z, data, nodes, graph, emb, gen, disc, e_opt, g_opt, d_opt):
+    # Positive samples & train embedder
+    d_opt.zero_grad()
+    
+    # Improve stability
+    emb.eval()
     disc.train()
     gen.eval()
 
-    embs = emb.forward(data)
-    t_preds = disc.forward(embs, graph)
+    # Positive samples
+    t_preds = disc.forward(z, graph)
 
     # Negative samples
     fake = gen.forward(graph).detach()
@@ -77,7 +124,7 @@ def train_step(nodes, graph, emb, gen, disc, e_opt, g_opt, d_opt):
     # Random samples
     rand = torch.rand(graph.x.size(0), EMBED_SIZE)
     r_preds = disc.forward(rand, graph)
-    
+
     # Calculate loss (combine true and false so only need
     # one call to backward)
     preds = torch.cat([t_preds, f_preds, r_preds], dim=1)
@@ -90,27 +137,8 @@ def train_step(nodes, graph, emb, gen, disc, e_opt, g_opt, d_opt):
     d_loss = criterion(preds, labels)
     d_loss.backward()
     d_opt.step()
-    e_opt.step()
 
-    # Train generator
-    g_opt.zero_grad()
-    emb.eval()
-    disc.eval()
-    gen.train()
-
-    fake = gen(graph)
-    
-    #preds = disc.forward(fake, graph)
-    #g_loss = criterion(preds, torch.full((graph.num_nodes,1), TRUE_VAL))
-    real = emb(data)
-    g_loss = mse(fake, real)
-    #g_loss += kld_gauss(mu,std)
-
-    g_loss.backward()
-    g_opt.step()
-    print("Gen Step")
-
-    return d_loss.item(), g_loss.item()
+    return d_loss
 
 
 def data_split(graphs, workers):
@@ -125,7 +153,7 @@ def data_split(graphs, workers):
 
     return jobs
 
-def proc_job(rank, world_size, all_graphs, jobs, val, epochs=250):
+def proc_job(rank, world_size, all_graphs, jobs, val, epochs=300):
     # DDP info
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = '42069'
@@ -147,7 +175,7 @@ def proc_job(rank, world_size, all_graphs, jobs, val, epochs=250):
         with open(TEST_HOME + 'nodes201.pkl', 'rb') as f:
             test_nodes = pickle.load(f)
         with open('testlog.txt', 'w+') as f:
-            f.write('AUC\tAP\tD-loss\tG-loss\n')
+            f.write('AUC\tAP\tE-loss\tD-loss\tG-loss\tBest\n')
 
     emb = NodeEmb(
         my_nodes[0].file_dim, 
@@ -159,8 +187,8 @@ def proc_job(rank, world_size, all_graphs, jobs, val, epochs=250):
         attn=ATTN_MECH,
         attn_kw=ATTN_KW
     )
-    gen = NodeGen(my_graphs[0].x.size(1), 32, HIDDEN_GEN, EMBED_SIZE)
-    disc = NodeDisc(EMBED_SIZE, 16, heads=16)
+    gen = NodeGen(my_graphs[0].x.size(1), STATIC_DIM, HIDDEN_GEN, EMBED_SIZE)
+    disc = NodeDisc(EMBED_SIZE, HIDDEN_DISC, heads=DISC_HEADS)
 
     # Initialize shared models
     gen = DDP(gen)
@@ -168,20 +196,19 @@ def proc_job(rank, world_size, all_graphs, jobs, val, epochs=250):
     disc = DDP(disc)
 
     # Initialize optimizers
-    e_opt = Adam(emb.parameters(), lr=EMB_LR)
-    d_opt = Adam(disc.parameters(), lr=0.01)
-    g_opt = Adam(gen.parameters(), lr=0.01)
+    e_opt = Adam(emb.parameters(), lr=EMB_LR, betas=(0.5, 0.999))
+    d_opt = Adam(disc.parameters(), lr=DISC_LR, betas=(0.5, 0.999))
+    g_opt = Adam(gen.parameters(), lr=GEN_LR, betas=(0.5, 0.999))
     
-    best = float('inf')
     num_samples = len(my_graphs)
-    early_stop = False
-    for e in range(epochs):
-        # Break in validatation section only gets out 
-        # of inner the loop; update this variable to 
-        # fully break
-        if early_stop:
-            break 
 
+    # Validation criterion
+    rolling_avg_vals = [10]*10
+    idx = 0
+    best = sum(rolling_avg_vals)
+    new_best = False
+
+    for e in range(epochs//num_samples):
         for i in range(num_samples):
             st = time.time() 
             
@@ -189,30 +216,84 @@ def proc_job(rank, world_size, all_graphs, jobs, val, epochs=250):
             gen.train() 
             disc.train()
 
-            d_loss,g_loss = train_step(
-                my_nodes[i], my_graphs[i],
+            data = sample(my_nodes[i], max_samples=MAX_SAMPLES)
+
+            args = (
+                data, my_nodes[i], my_graphs[i],
                 emb, gen, disc,
                 e_opt, g_opt, d_opt
-            ) 
+            )
+
+            '''
+            if e % (ON+OFF) < ON: 
+                e_loss = emb_step(*args)
+                z = get_emb(my_nodes[i], emb)
+                d_loss = disc_step(z, *args)
+                g_loss = torch.tensor([0.])
+
+            else:
+                z = get_emb(my_nodes[i], emb)
+                e_loss = torch.tensor([0.])
+                d_loss = disc_step(z, *args)
+                g_loss = gen_step(z, *args)
+            '''
+            e_loss = emb_step(*args)
+            z = get_emb(my_nodes[i], emb)
+            d_loss = disc_step(z, *args)
+            g_loss = gen_step(z, *args)
    
+            # Synchronize loss vals across workers
+            dist.all_reduce(e_loss)
+            dist.all_reduce(d_loss)
+            dist.all_reduce(g_loss)
+
             if rank == 0:
+                rolling_avg_vals[idx%10] = d_loss.item()
+                idx += 1
+
                 print(
-                    "[%d-%d] Disc: %0.4f, Gen: %0.4f (%0.2fs)" 
-                    % (e, i, d_loss, g_loss, time.time()-st)
+                    "[%d-%d] Emb: %0.4f Disc: %0.4f, Gen: %0.4f (%0.2fs)" 
+                    % (e, i, e_loss.item(), d_loss.item(), g_loss.item(), time.time()-st),
+                    end=''
                 )   
 
-            # So we can check in and see if the validation is really worth it
-            # Always save, just have the filename different so we can differ what
-            # val thought was best, vs. what just training forever looks like
+                rolling_avg = sum(rolling_avg_vals)/10
+
+                # Performance seems somewhat tied to embedder loss
+                # but especially when we're in a local minimum
+                if rolling_avg < best:
+                    new_best = True
+                    print("*")
+                    best = rolling_avg
+                    torch.save(disc.module, 'saved_models/embedder/disc_0.pkl')
+                    torch.save(gen.module, 'saved_models/embedder/gen_0.pkl')
+                    torch.save(emb.module, 'saved_models/embedder/emb_0.pkl')  
+                else:
+                    print()
+
+            # It's notoriously hard to validate GANs. Trying to see if theres
+            # a good stopping point by looking at all this
             if rank == 0:
                 torch.save(disc.module, 'saved_models/embedder/disc_1.pkl')
                 torch.save(gen.module, 'saved_models/embedder/gen_1.pkl')
                 torch.save(emb.module, 'saved_models/embedder/emb_1.pkl')
 
-                auc,ap = test_emb(test_nodes, test_graph, '', 1, verbose=False)
+                # Otherwise, emb wont change so no need to rebuild them
+                #if e % (ON+OFF) < ON:
+                test_z = get_emb(test_nodes, emb)
+
+                auc,ap = test_emb_input(test_z, test_nodes, test_graph, disc)
                 print('AUC: ', auc, 'AP: ', ap)
+                print()
+                
                 with open('testlog.txt', 'a+') as f:
-                    f.write('%f\t%f\t%f\t%f\n' % (auc,ap,d_loss,g_loss))
+                    f.write('%f\t%f\t%f\t%f\t%f\t%d\n' % (auc,ap,e_loss,d_loss,g_loss,new_best))
+                
+                new_best = False
+
+                # Just curious if as gen gets better it can produce useful encodings too
+                #auc,ap = test_gen(test_nodes, test_graph, '', 1, verbose=False, max_samples=MAX_SAMPLES)
+                #print("GAUC: ",auc,"GAP: ",ap)
 
             dist.barrier()
 

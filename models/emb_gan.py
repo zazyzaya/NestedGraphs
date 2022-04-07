@@ -1,8 +1,11 @@
+from turtle import forward
 import torch 
-from torch import nn 
+from torch import gru, nn 
 from torch.nn.parameter import Parameter
-from torch_geometric.nn import GATConv, GCNConv
+from torch_geometric.nn import GATConv, GCNConv, GatedGraphConv
+
 from .hostlevel import Time2Vec2d
+from .tree_gru import TreeGRUConv
 
 class NodeGenerator(nn.Module):
     def __init__(self, in_feats, rand_feats, hidden_feats, out_feats, activation=nn.RReLU) -> None:
@@ -57,14 +60,11 @@ class NodeGeneratorCorrected(nn.Module):
     def forward(self, graph):
         mu, std = self.get_distros(graph)
 
-        if self.training:
-            # Reparameterize 
-            x = torch.FloatTensor(mu.size()).normal_()
-            x = x.mul(std).add(mu)
-            return x, mu, std
+        # Reparameterize 
+        x = torch.FloatTensor(mu.size()).normal_()
+        x = x.mul(std).add(mu)
+        return x, mu, std
 
-        else:
-            return mu
 
     def get_distros(self, graph):
         x = self.net(graph.x)
@@ -78,12 +78,12 @@ class NodeGeneratorNonVariational(nn.Module):
     The previous model is so successful when not reparameterizing, 
     I wonder if we even need to make it variational
     '''
-    def __init__(self, in_feats, _, hidden_feats, out_feats, activation=nn.RReLU) -> None:
+    def __init__(self, in_feats, static_dim, hidden_feats, out_feats, activation=nn.RReLU) -> None:
         # Blank argument so signature matches other gens
         super().__init__()
 
         self.net = nn.Sequential(
-            nn.Linear(in_feats, hidden_feats),
+            nn.Linear(in_feats+static_dim, hidden_feats),
             nn.Dropout(0.25, inplace=True),
             nn.RReLU(),
             nn.Linear(hidden_feats, hidden_feats),
@@ -93,8 +93,16 @@ class NodeGeneratorNonVariational(nn.Module):
             nn.Sigmoid()
         )   
 
+        self.static_dim = static_dim
+
     def forward(self, graph):
-        return self.net(graph.x)
+        x = graph.x 
+        if self.static_dim > 0:
+            x = torch.cat([
+                x, torch.rand(x.size(0), self.static_dim)
+            ], dim=1)
+        
+        return self.net(x)
 
 class NodeGeneratorCovar(NodeGeneratorCorrected):
     def __init__(self, in_feats, _, hidden_feats, out_feats, activation=nn.RReLU) -> None:
@@ -172,3 +180,56 @@ class GCNDiscriminator(GATDiscriminator):
         self.gat1 = GCNConv(emb_feats, hidden_feats)
         self.gat2 = GCNConv(hidden_feats, hidden_feats)
         self.lin = nn.Linear(hidden_feats, 1)
+
+class GatedGraphDiscriminator(nn.Module):
+    def __init__(self, emb_feats, hidden_feats, heads=8):
+        super().__init__() 
+
+        self.gnn1 = GatedGraphConv(hidden_feats, heads)
+        self.gnn2 = GatedGraphConv(hidden_feats, heads)
+        self.lin = nn.Linear(hidden_feats, 1)
+
+    def forward(self, z, graph):
+        x = torch.tanh(self.gnn1(z, graph.edge_index))
+        x = torch.tanh(self.gnn2(x, graph.edge_index))
+        return self.lin(x)
+
+class TreeGRUDiscriminator(nn.Module):
+    def __init__(self, emb_feats, hidden_feats, depth=3, gru_layers=2, **kws):
+        super().__init__() 
+
+        self.gru = TreeGRUConv(emb_feats, hidden_feats, depth, gru_layers=gru_layers)
+        self.out = nn.Sequential(nn.Tanh(), nn.Linear(hidden_feats, 1))
+
+    def forward(self, z, graph):
+        x = self.gru(z, graph.edge_index)
+        return self.out(x)
+
+class TreeGRUGenerator(nn.Module):
+    def __init__(self, in_feats, static_dim, hidden_feats, out_feats):
+        super().__init__()
+        self.node_gen = NodeGeneratorNonVariational(in_feats, static_dim, hidden_feats, hidden_feats)
+        self.topology = TreeGRUConv(hidden_feats, out_feats, 3)
+
+    def forward(self, graph):
+        z = self.node_gen(graph)
+        return torch.sigmoid(self.topology(z, graph.edge_index))
+
+class FFNNDiscriminator(nn.Module):
+    '''
+    For ablation study. Doesn't work very well, so we know 
+    GNNs add value (Gets stuck around AUC 0.5, AP 0.7, ie random)
+    '''
+    def __init__(self, emb_feats, hidden_feats, heads=8):
+        super().__init__()
+
+        self.net = nn.Sequential(
+            nn.Linear(emb_feats, hidden_feats),
+            nn.ReLU(),
+            nn.Linear(hidden_feats, hidden_feats),
+            nn.ReLU(),
+            nn.Linear(hidden_feats, 1)
+        )
+    
+    def forward(self, z, _):
+        return self.net(z)
