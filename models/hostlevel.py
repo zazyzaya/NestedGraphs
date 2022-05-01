@@ -243,27 +243,54 @@ class BuiltinAttention(nn.Module):
 
     def forward(self, ts, x, batch_size=None):
         x = packed_cat([ts, x])
-        x,seq_len = pad_packed_sequence(x)
 
-        if batch_size is None:
-            batch_size = x.size(1)
-
-        outs = []
-        for i in range((x.size(0)//batch_size)+1):
-            seq = x[:, i:i+batch_size, :]
-            
-            mask = torch.zeros((seq.size(1), seq.size(0)))
-            for j in range(seq.size(1)):
-                mask[j, seq_len[i+j]:] = 1
-
-            for l in range(self.layers):
-                q,k,v = self.kqvs[l](seq)
-                seq,_ = self.attns[l](q,k,v, key_padding_mask=mask)
-
-            sizes = seq_len[i:i+batch_size]
-            outs.append(seq.sum(dim=0).div(sizes.unsqueeze(-1)))
+        # L x N x d
+        x,seq_len = pad_packed_sequence(x)    
         
-        return self.project(torch.cat(outs, dim=0))
+        # N x L
+        mask = torch.zeros((x.size(1), x.size(0)))
+
+        # Mask out padding
+        for i in range(x.size(1)):
+            mask[i, seq_len[i]:] = 1
+
+        for l in range(self.layers):
+            q,k,v = self.kqvs[l](x)
+            x,_ = self.attns[l](q,k,v, key_padding_mask=mask)
+
+        # Avg
+        outs = x.sum(dim=0).div(seq_len.unsqueeze(-1))
+        return self.project(outs)
+
+class NodeEmbedderNoTime(nn.Module):
+    def __init__(self, f_feats, r_feats, m_feats, hidden, out, embed_size, 
+                t2v_dim=8, attn='mean', attn_kw={}):
+
+        super().__init__()
+
+        Attn = BuiltinAttention
+
+        self.f_attn = Attn(f_feats, hidden, out, **attn_kw)
+        self.r_attn = Attn(r_feats, hidden, out, **attn_kw)
+        self.combo = nn.Linear(out*2, embed_size)
+
+    def forward(self, data, *args, **kwargs):
+        if 'batch_size' in kwargs:
+            bs = kwargs['batch_size']
+        else:
+            bs = None
+            
+        t,f = data['files']
+        f = self.f_attn(f, batch_size=bs)
+
+        t,r = data['regs']
+        r = self.r_attn(r, batch_size=bs)
+
+        #t,m = data['mods']
+        #m = self.m_attn(self.t2v(t), m)
+
+        x = torch.cat([f,r], dim=1)
+        return torch.sigmoid(self.combo(x))
 
 class NodeEmbedderSelfAttention(nn.Module):
     def __init__(self, f_feats, r_feats, m_feats, hidden, out, embed_size, 

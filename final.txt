@@ -1,0 +1,2 @@
+Last AUC	Last AP	Last Pr	Last Re	Best Epoch	Best AUC	Best AP	Best Pr	Best Re
+WD: 0.010000

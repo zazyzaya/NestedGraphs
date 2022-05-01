@@ -147,6 +147,7 @@ class GATDiscriminator(nn.Module):
         self.gat1 = GATConv(emb_feats, hidden_feats, heads=heads)
         self.gat2 = GATConv(hidden_feats*heads, hidden_feats, heads=heads)
         self.lin = nn.Linear(hidden_feats*heads, 1)
+        self.drop = nn.Dropout(0.25)
 
 
     def forward(self, z, graph):
@@ -154,8 +155,8 @@ class GATDiscriminator(nn.Module):
         # Experiments showed the graph node feats are unimportant
         # saves a bit of time, and shrinks the model a touch
 
-        x = torch.tanh(self.gat1(z, graph.edge_index))
-        x = torch.tanh(self.gat2(x, graph.edge_index))
+        x = self.drop(torch.tanh(self.gat1(z, graph.edge_index)))
+        x = self.drop(torch.tanh(self.gat2(x, graph.edge_index)))
         
         # Sigmoid applied later. Using BCE loss w Logits
         return self.lin(x)
@@ -180,6 +181,7 @@ class GCNDiscriminator(GATDiscriminator):
         self.gat1 = GCNConv(emb_feats, hidden_feats)
         self.gat2 = GCNConv(hidden_feats, hidden_feats)
         self.lin = nn.Linear(hidden_feats, 1)
+        
 
 class GatedGraphDiscriminator(nn.Module):
     def __init__(self, emb_feats, hidden_feats, heads=8):

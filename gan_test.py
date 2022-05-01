@@ -6,6 +6,7 @@ import torch
 import datetime as dt
 from zoneinfo import ZoneInfo
 from sklearn.metrics import average_precision_score as ap, roc_auc_score as auc
+from sklearn.metrics import precision_score, recall_score
 from torch.distributions import Normal
 
 from graph_utils import propogate_labels
@@ -93,20 +94,30 @@ def test_emb(nodes, graph, model_str, dim, model_path=HOME+'saved_models/', verb
     return auc_score, ap_score
 
 def test_emb_input(zs, nodes, graph, disc):
-    inv_map = {v:k for k,v in nodes.node_map.items()}
     labels = propogate_labels(graph,nodes)
     
     with torch.no_grad():
         disc.eval()
-        preds = disc(zs, graph)
+        preds = torch.sigmoid(disc(zs, graph).nan_to_num())
 
     vals, idx = torch.sort(preds.squeeze(-1), descending=True)
-    labels = labels[idx]
+    labels = labels[idx].clamp(0,1)
 
-    auc_score = auc(labels.clamp(0,1), vals)
-    ap_score = ap(labels.clamp(0,1), vals)
+    auc_score = auc(labels, vals)
+    ap_score = ap(labels, vals)
 
-    return auc_score, ap_score
+    top_k = [50, 100, 150, 200, 250]
+    pr = {}
+    for k in top_k: 
+        preds = torch.zeros(vals.size())
+        preds[:k] =1.
+        
+        p = precision_score(labels, preds)
+        r = recall_score(labels, preds)
+
+        pr[k] = (p,r)
+
+    return auc_score, ap_score, pr
 
 def test_gen(nodes, graph, model_str, dim, model_path=HOME+'saved_models/', verbose=True, max_samples=None):
     inv_map = {v:k for k,v in nodes.node_map.items()}
