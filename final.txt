@@ -1,2 +1,4 @@
 Last AUC	Last AP	Last Pr	Last Re	Best Epoch	Best AUC	Best AP	Best Pr	Best Re
-WD: 0.010000
+quantile: 0.500000
+gen_latent: 16.000000
+0.571848	0.112359	0.000000	0.000000	0-0	0.683014	0.156004	0.000000	0.000000
