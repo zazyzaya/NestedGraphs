@@ -13,54 +13,65 @@ from torch.nn import BCEWithLogitsLoss, MSELoss
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import Adam, Adagrad
 
-from models.hostlevel import NodeEmbedderSelfAttention, NodeEmbedderNoTime
-from models.emb_gan import GATDiscriminator, NodeGeneratorCorrected, GCNDiscriminator, \
-	NodeGeneratorNonVariational, TreeGRUDiscriminator, TreeGRUGenerator, FFNNDiscriminator
+from models.hostlevel import NodeEmbedderSelfAttention
+from models.emb_gan import GCNDiscriminator, NodeGenerator, NodeGeneratorTopology
 from models.utils import kld_gauss
 from gan_test import test_emb_input
 
-N_JOBS = 4 # How many worker processes will train the model
-P_THREADS = 4 # About the point of diminishing returns from experiments
+'''
+Runtimes for various configurations:
+Jobs,Threads
+12,1 -> 128s/e
+8,2 -> 110s/e
+6,3 -> 117s/e
+4,4 -> 130s/e
+2,8 -> 146s/e
+'''
+N_JOBS = 8 # How many worker processes will train the model
+P_THREADS = 2 # How many threads each worker gets
 
 criterion = BCEWithLogitsLoss()
 mse = MSELoss()
 
 # Embedder params
 EMB_HIDDEN = 64
+EMB_T_HIDDEN = 256
 EMB_OUT = 32
 EMB_SIZE = 64
-T2V = 8
+T2V = 64
 ATTN_MECH = 'torch'
 ATTN_KW = {
-	'layers': 4,
+	'layers': 2,
 	'heads': 8
 }
 
 # Gen Params
-GEN_HIDDEN = 128
+GEN_HIDDEN = 64
 GEN_LATENT = 16
-QUANTILE = 1.
+ALPHA = 0.5
+BETA = 15
 
 # Disc params
-DISC_HIDDEN = 8 # Optimal hyperparam search
-TRUE_VAL = 0.1 # One-sided label smoothing (real values smoothed)
-FALSE_VAL = 1. # False should approach 1 as in an anomaly score
+DISC_HIDDEN = 32 # Optimal hyperparam search
+GAMMA = 0.1
 
 # Training params
-EPOCHS = 5
-BOOSTED = 0
-EMB_LR = 0.005
-GEN_LR = 0.005
-DISC_LR= 0.005
-MAX_SAMPLES = 50
+EPOCHS = 10
+BOOSTED = 10
+EMB_LR = 0.01
+GEN_LR = 0.001
+DISC_LR= 0.001
+MAX_SAMPLES = 64
 WD = 0.0
+D_STEPS = 3
 
 # Decide which architecture to use here
 NodeEmb = NodeEmbedderSelfAttention
-NodeGen = NodeGeneratorNonVariational
+# NodeGen = NodeGeneratorTopology  # hyperparam
+GEN_TOPOLOGY = False
 NodeDisc = GCNDiscriminator
 
-def sample(nodes, max_samples=0):
+def sample(nodes, max_samples=256):
 	return{
 		'regs': nodes.sample_feat('regs', max_samples=max_samples),
 		'files': nodes.sample_feat('files', max_samples=max_samples)
@@ -97,7 +108,7 @@ def emb_step(data, nodes, graph, emb, gen, disc, e_opt, g_opt, d_opt):
 	embs = emb.forward(data)
 	t_preds = disc.forward(embs, graph)
 	
-	labels = torch.full(t_preds.size(), TRUE_VAL)
+	labels = torch.full(t_preds.size(), 0.0)
 	loss = criterion(t_preds, labels)
 
 	loss.backward()
@@ -105,12 +116,8 @@ def emb_step(data, nodes, graph, emb, gen, disc, e_opt, g_opt, d_opt):
 
 	return loss
 
-def gen_step(z, data, nodes, graph, emb, gen, disc, e_opt, g_opt, d_opt, verbose=True):
-	'''
-	Implimenting OCAN "bad generator" loss function for anomaly detection
-	https://arxiv.org/abs/1803.01798
-	'''
-	
+
+def gen_step(z, data, nodes, graph, emb, gen, disc, e_opt, g_opt, d_opt, verbose=True, badgan=True):
 	g_opt.zero_grad()
 	
 	emb.eval()
@@ -118,54 +125,17 @@ def gen_step(z, data, nodes, graph, emb, gen, disc, e_opt, g_opt, d_opt, verbose
 	gen.train()
 
 	fake = gen(graph)
-	g_loss = mse(fake, z)
+	f_preds = disc(fake, graph)
 
-	# Paper only runs BCE loss on predictions with 
-	# low probability. I.e., if a sample looks "fake enough", 
-	# right on the boarder of the discriminator's decision boundary
-	# don't change anything other than the MSE loss 
-	with torch.no_grad():
-		real = disc(z, graph)
-		cutoff = torch.quantile(real, QUANTILE)
-
-	# Training as a "bad GAN". Results should look fake, but be as 
-	# close to the real distribution as possible
-	preds = disc(fake, graph)
-
-	# Push the lowest out, pull the highest back in 
-	tr_preds = preds[preds <= cutoff]
-	fk_preds = preds[preds >  cutoff]
-
-	if verbose:
-		print("%0.2f%% Low/High ratio" % (100*tr_preds.size(0)/preds.size(0)))
-
-	# If one worker runs backward on BCE loss, all of them must,
-	# otherwise DDP throws a hissy fit
-	#bce_loss = torch.tensor(tr_preds.size(0))
-	#dist.all_reduce(bce_loss)
-
-	#if bce_loss and tr_preds.size(0):
-	labels = torch.cat([
-		torch.full(tr_preds.size(), FALSE_VAL),
-		torch.full(fk_preds.size(), TRUE_VAL)
-	], dim=0)
-
-	preds = torch.cat([
-		tr_preds, fk_preds
-	], dim=0)
-	g_loss += criterion(preds, labels)
+	labels = torch.full(f_preds.size(), ALPHA)
+	encirclement_loss = criterion(f_preds, labels)
 	
-	'''
-	# Not a great solution, but the other workers have to make
-	# some updates using the disc gradient, otherwise DDP throws an 
-	# error
-	elif bce_loss:
-		g_loss += criterion(
-			preds[preds.argmin()], 
-			torch.tensor([FALSE_VAL])
-		)
-	'''
+	mu = fake.mean(dim=0)
+	dispersion_loss = (1 / ((fake-mu).pow(2)+1e-9)).mean()
 
+	#print(encirclement_loss, dispersion_loss)
+
+	g_loss = encirclement_loss + BETA*dispersion_loss
 	g_loss.backward()
 	g_opt.step()
 	
@@ -187,20 +157,13 @@ def disc_step(z, data, nodes, graph, emb, gen, disc, e_opt, g_opt, d_opt):
 	fake = gen.forward(graph).detach()
 	f_preds = disc.forward(fake, graph)
 
-	# Random samples
-	rand = torch.rand(graph.x.size(0), z.size(1))
-	r_preds = disc.forward(rand, graph)
+	t_loss = criterion(t_preds, torch.zeros(t_preds.size()))
+	f_loss = criterion(f_preds, torch.full(f_preds.size(), 1.))
+	
+	# Added as an additional term in OCGAN paper
+	#e_loss = -((1-t_preds)*torch.log(1-t_preds)).mean()
 
-	# Calculate loss (combine true and false so only need
-	# one call to backward)
-	preds = torch.cat([t_preds, f_preds, r_preds], dim=1)
-	labels = torch.cat([
-		torch.full(t_preds.size(), TRUE_VAL),
-		torch.full(f_preds.size(), FALSE_VAL),
-		torch.full(r_preds.size(), FALSE_VAL)
-	], dim=1)
-
-	d_loss = criterion(preds, labels)
+	d_loss = t_loss + GAMMA*f_loss
 	d_loss.backward()
 	d_opt.step()
 
@@ -228,6 +191,8 @@ def proc_job(rank, world_size, all_graphs, jobs, val, hp):
 	# Sets number of threads used by this worker
 	torch.set_num_threads(P_THREADS)
 
+	NodeGen = NodeGeneratorTopology if hp.topo else NodeGenerator
+
 	my_graphs=[]; my_nodes=[]
 	for gid in range(jobs[rank], jobs[rank+1]):
 		with open(DATA_HOME + 'graph%d.pkl' % all_graphs[gid], 'rb') as f:
@@ -247,10 +212,9 @@ def proc_job(rank, world_size, all_graphs, jobs, val, hp):
 
 	emb = NodeEmb(
 		my_nodes[0].file_dim, 
-		my_nodes[0].reg_dim,
-		my_nodes[0].mod_dim, 
-		hp.emb_hidden, hp.emb_out, hp.emb_size,
-		attn=hp.attn_mech, attn_kw=hp.attn_kw,
+		my_nodes[0].reg_dim, 
+		hp.emb_hidden, hp.emb_t_hidden, hp.emb_out, hp.emb_size,
+		attn_kw=hp.attn_kw,
 		t2v_dim=hp.t2v
 	)
 	gen = NodeGen(
@@ -274,6 +238,9 @@ def proc_job(rank, world_size, all_graphs, jobs, val, hp):
 
 	num_samples = len(my_graphs)
 
+	# Best loss 
+	best = float('inf')
+
 	# Best all time
 	all_time = 0
 	all_time_str = ''
@@ -294,10 +261,12 @@ def proc_job(rank, world_size, all_graphs, jobs, val, hp):
 				e_opt, g_opt, d_opt
 			)
 
-			z = get_emb(my_nodes[j], emb)
-			d_loss = disc_step(z, *args)
-			g_loss = gen_step(z, *args)
 			e_loss = emb_step(*args)
+			z = get_emb(my_nodes[j], emb)
+			
+			g_loss = gen_step(z, *args, verbose=False)
+			d_loss = [disc_step(z, *args) for _ in range(hp.d_steps)]
+			d_loss = sum(d_loss)/hp.d_steps
    
 			# Synchronize loss vals across workers
 			dist.all_reduce(e_loss)
@@ -316,10 +285,6 @@ def proc_job(rank, world_size, all_graphs, jobs, val, hp):
 			# It's notoriously hard to validate GANs. Trying to see if theres
 			# a good stopping point by looking at all this
 			if rank == 0:
-				torch.save(disc.module, 'saved_models/embedder/disc_1.pkl')
-				torch.save(gen.module, 'saved_models/embedder/gen_1.pkl')
-				torch.save(emb.module, 'saved_models/embedder/emb_1.pkl')
-
 				test_z = get_emb(test_nodes, emb)
 				auc,ap,pr = test_emb_input(test_z, test_nodes, test_graph, disc)
 
@@ -333,6 +298,11 @@ def proc_job(rank, world_size, all_graphs, jobs, val, hp):
 				if ap > all_time: 
 					all_time = ap 
 					all_time_str = '%d-%d\t%f\t%f\t%f\t%f' % (e,i,auc, ap, pr[200][0], pr[200][1])
+
+					# Use 201 as validation set?
+					torch.save(disc.module, 'saved_models/embedder/disc_0.pkl')
+					torch.save(gen.module, 'saved_models/embedder/gen_0.pkl')
+					torch.save(emb.module, 'saved_models/embedder/emb_0.pkl')
 
 			dist.barrier()
 
@@ -376,12 +346,24 @@ def proc_job(rank, world_size, all_graphs, jobs, val, hp):
 		# Last 
 		test_z = get_emb(test_nodes, emb)
 		auc,ap,pr = test_emb_input(test_z, test_nodes, test_graph, disc)
+		
+		# And save it for later, just in case
+		torch.save(disc.module, 'saved_models/embedder/disc_1.pkl')
+		torch.save(gen.module, 'saved_models/embedder/gen_1.pkl')
+		torch.save(emb.module, 'saved_models/embedder/emb_1.pkl')
+
+		disc = torch.load('saved_models/embedder/disc_0.pkl')
+		emb = torch.load('saved_models/embedder/emb_0.pkl')
+
+		test_z = get_emb(test_nodes, emb)
+		s_auc, s_ap, s_pr = test_emb_input(test_z, test_nodes, test_graph, disc)
 
 		with open('final.txt', 'a+') as f:
 			f.write(
-				'%f\t%f\t%f\t%f\t%s\n'
+				'%f\t%f\t%f\t%f\t%f\t%f\t%f\t%f\t%s\n'
 				% (
-					auc, ap, pr[200][0], pr[200][1],  
+					auc, ap, pr[200][0], pr[200][1],
+					s_auc, s_ap, s_pr[200][0], s_pr[200][1],    
 					all_time_str
 				)
 			)
@@ -394,7 +376,7 @@ def proc_job(rank, world_size, all_graphs, jobs, val, hp):
 		dist.destroy_process_group()
 
 
-TRAIN_GRAPHS = [i for i in range(1,5)]
+TRAIN_GRAPHS = [i for i in range(1,25)]
 DATA_HOME = 'inputs/benign/'
 TEST_HOME = 'inputs/mal/'
 def main(params):
@@ -402,17 +384,35 @@ def main(params):
 	# need to pass all hyperparams explicitly
 	hyperparams = SimpleNamespace(
 		emb_lr=EMB_LR, disc_lr=DISC_LR, gen_lr=GEN_LR,
-		epochs=EPOCHS, boosted=BOOSTED, wd=WD,
-		emb_hidden=EMB_HIDDEN, emb_out=EMB_OUT, emb_size=EMB_SIZE,
+		epochs=EPOCHS, boosted=BOOSTED, wd=WD, d_steps=D_STEPS,
+		emb_hidden=EMB_HIDDEN, emb_t_hidden=EMB_T_HIDDEN, emb_out=EMB_OUT, emb_size=EMB_SIZE,
 		t2v=T2V, attn_mech=ATTN_MECH, attn_kw=ATTN_KW, 
-		gen_hidden=GEN_HIDDEN, gen_latent=GEN_LATENT, quantile=QUANTILE,
+		gen_hidden=GEN_HIDDEN, gen_latent=GEN_LATENT, topo=GEN_TOPOLOGY,
 		disc_hidden=DISC_HIDDEN,
 	)
 
 	# Expects list of tuples (name, value) for gridsearching
+	special = ['lr', 'attn.layers', 'attn.heads']
 	for param in params:
-		assert hasattr(hyperparams, param[0]), 'Recieved value %s not in namespace' % param[0]
-		setattr(hyperparams, param[0], param[1])
+		assert hasattr(hyperparams, param[0]) or param[0] in special, 'Recieved value %s not in namespace' % param[0]
+		
+		# Special case when all lr's are the same
+		if param[0] == 'lr': 
+			for lr in ['emb_lr', 'disc_lr', 'gen_lr']:
+				setattr(hyperparams, lr, param[1])
+		
+		elif param[0] == 'attn.layers':
+			kw  = hyperparams.attn_kw
+			kw['layers'] = param[1]
+			hyperparams.attn_kw = kw 
+		
+		elif param[0] == 'attn.heads':
+			kw  = hyperparams.attn_kw
+			kw['heads'] = param[1]
+			hyperparams.attn_kw = kw
+
+		else:
+			setattr(hyperparams, param[0], param[1])
 
 	world_size = min(N_JOBS, len(TRAIN_GRAPHS))
 	jobs = data_split(TRAIN_GRAPHS, world_size)
@@ -428,19 +428,23 @@ if __name__ == '__main__':
 
 	# List of values here
 	params = {
-		'quantile': [0.5,0.75,0.8,0.9,0.99,1.],
-		'gen_latent': [16,32,64,8,4,0]
+		'gen_latent': [8,16,32,64],
 	}
 
 	# Produces a nice list of [ [(p1, val), ..., (pn, val)], [...] ] for grid searches
-	labels, values = zip(*params.items())
-	combos = [v for v in itertools.product(*values)]
-	args = [[(labels[i], c[i]) for i in range(len(c))] for c in combos]
+	if params:
+		labels, values = zip(*params.items())
+		combos = [v for v in itertools.product(*values)]
+		args = [[(labels[i], c[i]) for i in range(len(c))] for c in combos]
+	else:
+		args = [[]]
 
 	for arg in args:
 		print(arg)
-		with open('final.txt', 'a') as f:
-			[f.write('%s: %f\n' % (v[0], v[1])) for v in arg]
+
+		if arg:
+			with open('final.txt', 'a') as f:
+				[f.write('%s: %f\n' % (v[0], v[1])) for v in arg]
 
 		[main(arg) for _ in range(5)]
 	

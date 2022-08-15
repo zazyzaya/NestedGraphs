@@ -254,7 +254,7 @@ class HostGraph(Data):
         self.x = []
         self.node_times = []
 
-        # Turns graph write-only after everything is built
+        # Turns graph read-only after everything is built
         self.ready = False
 
     def add_node(self, ts, pid, feat, nodelist):

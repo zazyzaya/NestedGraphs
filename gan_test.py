@@ -271,7 +271,7 @@ if __name__ == '__main__':
     )
     parser.add_argument(
         '--dim', '-d',
-        type=int, default=64
+        type=int, default=1
     )
     args = parser.parse_args()
 

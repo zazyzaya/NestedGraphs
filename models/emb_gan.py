@@ -8,72 +8,6 @@ from .hostlevel import Time2Vec2d
 from .tree_gru import TreeGRUConv
 
 class NodeGenerator(nn.Module):
-    def __init__(self, in_feats, rand_feats, hidden_feats, out_feats, activation=nn.RReLU) -> None:
-        super().__init__()
-
-        self.rand_feats = rand_feats 
-
-        # Also learn the distribution to draw samples from? Maybe this is dumb
-        self.mean = nn.Linear(in_feats, rand_feats)
-        self.std = nn.Linear(in_feats, rand_feats)
-
-        self.net = nn.Sequential(
-            nn.Linear(rand_feats, hidden_feats),
-            nn.RReLU(),
-            nn.Linear(hidden_feats, out_feats),
-            activation()
-        )
-
-    def forward(self, graph):
-        x = graph.x 
-        rnd = torch.FloatTensor(x.size(0), self.rand_feats).normal_()
-        
-        mu = self.mean(x)
-        std = self.std(x)
-        x = rnd.mul(std).add(mu)
-
-        return self.net(x)
-
-class NodeGeneratorCorrected(nn.Module):
-    '''
-    I noticed several mistakes in the variational structure
-    of the OG NodeGenerator class. I'm correcting theme here,
-    but leaving the old class so it's backward compatible w 
-    old saved models
-    '''
-    def __init__(self, in_feats, _, hidden_feats, out_feats, activation=nn.RReLU) -> None:
-        # Blank argument so signature matches other gens
-        super().__init__()
-
-        self.net = nn.Sequential(
-            nn.Linear(in_feats, hidden_feats),
-            nn.Dropout(0.25, inplace=True),
-            nn.RReLU(),
-            nn.Linear(hidden_feats, hidden_feats),
-            nn.Dropout(0.25, inplace=True),
-            nn.RReLU()
-        )   
-
-        self.mu = nn.Linear(hidden_feats, out_feats)
-        self.log_std = nn.Linear(hidden_feats, out_feats)
-
-    def forward(self, graph):
-        mu, std = self.get_distros(graph)
-
-        # Reparameterize 
-        x = torch.FloatTensor(mu.size()).normal_()
-        x = x.mul(std).add(mu)
-        return x, mu, std
-
-
-    def get_distros(self, graph):
-        x = self.net(graph.x)
-        mu = self.mu(x)
-        std = self.log_std(x).exp()
-
-        return mu, std
-
-class NodeGeneratorNonVariational(nn.Module):
     '''
     The previous model is so successful when not reparameterizing, 
     I wonder if we even need to make it variational
@@ -104,40 +38,32 @@ class NodeGeneratorNonVariational(nn.Module):
         
         return self.net(x)
 
-class NodeGeneratorCovar(NodeGeneratorCorrected):
-    def __init__(self, in_feats, _, hidden_feats, out_feats, activation=nn.RReLU) -> None:
-        super().__init__(in_feats, _, hidden_feats, out_feats, activation)
+
+class NodeGeneratorTopology(nn.Module):
+    '''
+    Replace linear layers w GCNs
+    '''
+    def __init__(self, in_feats, static_dim, hidden_feats, out_feats, activation=nn.RReLU) -> None:
+        super().__init__()
         
-        self.log_std = nn.Linear(
-            hidden_feats, out_feats**2
-        )
-        self.out_feats = out_feats
+        self.conv1 = GCNConv(in_feats+static_dim, hidden_feats)
+        self.conv2 = GCNConv(hidden_feats, hidden_feats)
+        self.act = nn.RReLU()
+        self.drop = nn.Dropout(0.25)
+        self.lin = nn.Linear(hidden_feats, out_feats)
 
-    def get_distros(self, graph):
-        x = self.net(graph.x)
-        mu = self.mu(x) 
-        cov = self.log_std(x).reshape(x.size(0), self.out_feats, self.out_feats).exp() 
-
-        return mu, cov 
+        self.static_dim = static_dim
 
     def forward(self, graph):
-        mu, cov = self.get_distros(graph)
-        x = torch.FloatTensor(mu.size(0), 1, mu.size(1)).normal_()
-        x = (x @ cov).squeeze()
-        return x + mu 
+        x = graph.x 
+        if self.static_dim > 0:
+            x = torch.cat([
+                x, torch.rand(x.size(0), self.static_dim)
+            ], dim=1)
 
-
-class NodeGeneratorTopology(NodeGenerator):
-    def __init__(self, in_feats, rand_feats, hidden_feats, out_feats, activation=nn.RReLU) -> None:
-        super().__init__(in_feats, rand_feats, hidden_feats, out_feats, activation)
-
-        self.conv1 = GCNConv(out_feats, hidden_feats)
-        self.conv2 = GCNConv(hidden_feats, out_feats)
-
-    def forward(self, graph):
-        x = super().forward(graph)
-        x = torch.rrelu(self.conv1(x, graph.edge_index))
-        return torch.rrelu(self.conv2(x, graph.edge_index))
+        x = self.drop(self.act(self.conv1(x, graph.edge_index)))
+        x = self.drop(self.act(self.conv2(x, graph.edge_index)))
+        return torch.sigmoid(self.lin(x))
 
 
 class GATDiscriminator(nn.Module):
@@ -206,16 +132,6 @@ class TreeGRUDiscriminator(nn.Module):
     def forward(self, z, graph):
         x = self.gru(z, graph.edge_index)
         return self.out(x)
-
-class TreeGRUGenerator(nn.Module):
-    def __init__(self, in_feats, static_dim, hidden_feats, out_feats):
-        super().__init__()
-        self.node_gen = NodeGeneratorNonVariational(in_feats, static_dim, hidden_feats, hidden_feats)
-        self.topology = TreeGRUConv(hidden_feats, out_feats, 3)
-
-    def forward(self, graph):
-        z = self.node_gen(graph)
-        return torch.sigmoid(self.topology(z, graph.edge_index))
 
 class FFNNDiscriminator(nn.Module):
     '''
