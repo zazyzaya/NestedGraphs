@@ -1,6 +1,7 @@
+import sys 
+
 from dateutil.parser import isoparse
 from joblib import Parallel, delayed
-
 from tqdm import tqdm
 
 from .hasher import proc_feats, file_feats, reg_feats, mod_feats 
@@ -15,6 +16,8 @@ PROC_DEPTH = 8
 FILE_DEPTH = 8
 REG_DEPTH = 8
 MOD_DEPTH = 4 # It's very rarely > 3
+
+EDGE = {'CREATE': 0, 'OPEN': 1}
 
 # Converts from ISO timestamp to UTC time since epoch
 fmt_ts = lambda x : isoparse(x).timestamp()
@@ -37,15 +40,18 @@ def parse_line(graph: HostGraph, nodelist: NodeList, line: str) -> None:
         return 
 
     if obj == 'PROCESS':
-        # For now just add process.create events
-        if act != 'CREATE':
+        # For now just add process.create or open events
+        if act not in ['CREATE', 'OPEN']:
             return 
 
+        # When processes are 'OPENED' their 'parent' is the
+        # source proc, and the target is the 'child'
         pid, ppid, path, ppath = feats
         graph.add_edge(
             ts, fmt_p(pid,path), fmt_p(ppid,ppath), 
             proc_feats(path, PROC_DEPTH), 
             proc_feats(ppath, PROC_DEPTH),
+            EDGE[act],
             nodelist
         )
 
@@ -67,12 +73,12 @@ def parse_line(graph: HostGraph, nodelist: NodeList, line: str) -> None:
             nodelist.add_mod(ts, fmt_p(pid,p_img), mod_feats(mod, MOD_DEPTH))
     '''
 
-def build_graph(host: int):
+def build_graph(host: int, day: int):
     g = HostGraph(host)
     nl = NodeList()
     prog = tqdm(desc='Lines parsed')
     
-    with open(SOURCE+'sysclient%04d.csv' % host) as f:
+    with open(SOURCE+'Sept%d/sysclient%04d.csv' % (day,host)) as f:
         line = f.readline()
 
         while(line):
@@ -89,13 +95,13 @@ def build_graph(host: int):
     return g, nl
     
 
-def build_graphs(hosts):
+def build_graphs(hosts, day):
     '''
     Given a sequence of hosts, build graphs for them in parallel
     '''
-    return Parallel(n_jobs=JOBS, prefer='processes')(
-        delayed(build_graph)(h) for h in hosts
+    return Parallel(n_jobs=min(JOBS,len(hosts)), prefer='processes')(
+        delayed(build_graph)(h, day) for h in hosts
     )
 
 if __name__ == '__main__':
-    build_graph(201)
+    build_graph(201,23)

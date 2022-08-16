@@ -4,7 +4,7 @@ from torch import gru, nn
 from torch.nn.parameter import Parameter
 from torch_geometric.nn import GATConv, GCNConv, GatedGraphConv
 
-from .hostlevel import Time2Vec2d
+from .embedder import Time2Vec2d
 from .tree_gru import TreeGRUConv
 
 class NodeGenerator(nn.Module):
@@ -24,7 +24,7 @@ class NodeGenerator(nn.Module):
             nn.Dropout(0.25, inplace=True),
             nn.RReLU(),
             nn.Linear(hidden_feats, out_feats),
-            nn.Sigmoid()
+            #nn.Sigmoid() embeddings have no nonlinear
         )   
 
         self.static_dim = static_dim
@@ -63,12 +63,32 @@ class NodeGeneratorTopology(nn.Module):
 
         x = self.drop(self.act(self.conv1(x, graph.edge_index)))
         x = self.drop(self.act(self.conv2(x, graph.edge_index)))
-        return torch.sigmoid(self.lin(x))
+        return self.lin(x)
+
+
+class NodeGeneratorPerturb(NodeGeneratorTopology):
+    '''
+    For this one, I'm thinking maybe we give it a masked version 
+    of the disc input and it tries to fill in the blanks?
+    '''
+    def forward(self, graph, x):
+        orig = x.clone() 
+
+        if self.static_dim > 0: 
+            x = torch.cat([
+                x, torch.rand(x.size(0), self.static_dim)
+            ], dim=1)
+
+        x = self.drop(self.act(self.conv1(x, graph.edge_index)))
+        x = self.drop(self.act(self.conv2(x, graph.edge_index)))
+        return self.lin(x)+orig
 
 
 class GATDiscriminator(nn.Module):
     def __init__(self, emb_feats, hidden_feats, heads=8):
         super().__init__()
+        self.args = (emb_feats, hidden_feats)
+        self.kwargs = dict(heads=heads)
 
         self.gat1 = GATConv(emb_feats, hidden_feats, heads=heads)
         self.gat2 = GATConv(hidden_feats*heads, hidden_feats, heads=heads)
@@ -88,22 +108,13 @@ class GATDiscriminator(nn.Module):
         return self.lin(x)
 
 
-class GATDiscriminatorTime(GATDiscriminator):
-    def __init__(self, emb_feats, hidden_feats, heads=8, t2v_dim=8):
-        super().__init__(emb_feats+t2v_dim, hidden_feats, heads=heads)
-        self.t2v = Time2Vec2d(t2v_dim)
-
-    def forward(self, z, graph):
-        #x = torch.cat([z,graph.x], dim=1)
-        # Experiments showed the graph node feats are unimportant
-        # saves a bit of time, and shrinks the model a touch
-        z = torch.cat([self.t2v(graph.node_times.unsqueeze(-1)), z], dim=1)
-        return super().forward(z, graph)
-
-
 class GCNDiscriminator(GATDiscriminator):
     def __init__(self, emb_feats, hidden_feats, heads=8):
         super().__init__(emb_feats, hidden_feats, heads)
+
+        self.args = (emb_feats, hidden_feats)
+        self.kwargs = dict(heads=heads)
+
         self.gat1 = GCNConv(emb_feats, hidden_feats)
         self.gat2 = GCNConv(hidden_feats, hidden_feats)
         self.lin = nn.Linear(hidden_feats, 1)

@@ -55,21 +55,27 @@ class BuiltinAttention(nn.Module):
     as a list and only do one at a time, otherwise will quickly run out
     of memory 
     '''
-    def __init__(self, in_feats, hidden, t_hidden, out, heads=8, layers=4):
+    def __init__(self, in_feats, hidden, t_hidden, out, heads=8, layers=4, proj_out=False):
         super().__init__() 
 
+        self.proj_out = proj_out
         self.layers = layers
         self.in_proj = nn.Sequential(
             nn.Linear(in_feats, hidden), 
             nn.ReLU()
         )
 
-        enc = nn.TransformerEncoderLayer(hidden, heads, dim_feedforward=t_hidden)
+        enc = nn.TransformerEncoderLayer(
+            hidden, heads, dim_feedforward=t_hidden, dropout=0.1
+        )
         norm = nn.LayerNorm(hidden)
         self.trans = nn.TransformerEncoder(enc, layers, norm)
 
         self.project = nn.Linear(hidden, out)
-        self.enc_token = nn.parameter.Parameter(
+        self.cls = nn.parameter.Parameter(
+            torch.rand(1,1,hidden)
+        )
+        self.sep = nn.parameter.Parameter(
             torch.rand(1,1,hidden)
         )
 
@@ -81,34 +87,45 @@ class BuiltinAttention(nn.Module):
         x = self.in_proj(x)
 
         # Add special token 
-        x = torch.cat([self.enc_token.repeat(1,x.size(1),1),x], dim=0)
+        x = torch.cat([
+            self.cls.repeat(1,x.size(1),1),
+            x,
+            self.sep.repeat(1,x.size(1),1)
+        ], dim=0)
         
         # N x L
         mask = torch.zeros((x.size(1), x.size(0)))
 
         # Mask out padding (taking care to acct for special token)
         for i in range(x.size(1)):
-            mask[i, (seq_len[i]+1):] = 1
+            mask[i, (seq_len[i]+2):] = 1
 
         x = self.trans(x, src_key_padding_mask=mask)
 
         # Get result of special token
         outs = x[0,:,:]
-        return self.project(outs)
+
+        # Paper found that returning token w MLP during training is 
+        # effective, but not during testing
+        if self.training or self.proj_out:
+            return self.project(outs)
+        else: 
+            return outs 
 
 
 class NodeEmbedderSelfAttention(nn.Module):
-    def __init__(self, f_feats, r_feats, hidden, t_hidden, out, embed_size, 
-                t2v_dim=8, attn_kw={}):
+    def __init__(self, f_feats, r_feats, hidden, t_hidden, out, 
+                t2v_dim=8, attn_kw={}, proj_out=False):
 
         super().__init__()
 
+        self.args=(f_feats, r_feats, hidden, t_hidden, out)
+        self.kwargs=dict(t2v_dim=t2v_dim, attn_kw=attn_kw)
+
         self.f_t2v = Time2Vec(t2v_dim)
         self.r_t2v = Time2Vec(t2v_dim)
-        self.f_attn = BuiltinAttention(f_feats+t2v_dim, hidden, t_hidden, out, **attn_kw)
-        self.r_attn = BuiltinAttention(r_feats+t2v_dim, hidden, t_hidden, out, **attn_kw)
-
-        self.combo = nn.Linear(out*2, embed_size)
+        self.f_attn = BuiltinAttention(f_feats+t2v_dim, hidden, t_hidden, out, **attn_kw, proj_out=proj_out)
+        self.r_attn = BuiltinAttention(r_feats+t2v_dim, hidden, t_hidden, out, **attn_kw, proj_out=proj_out)
 
     def forward(self, data, *args, **kwargs):
         t,f = data['files']
@@ -120,5 +137,4 @@ class NodeEmbedderSelfAttention(nn.Module):
         #t,m = data['mods']
         #m = self.m_attn(self.t2v(t), m)
 
-        x = torch.cat([f,r], dim=1)
-        return torch.sigmoid(self.combo(x))
+        return torch.cat([f,r], dim=1)

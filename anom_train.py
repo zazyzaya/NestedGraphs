@@ -1,110 +1,100 @@
-from copy import deepcopy
+import itertools
 import os 
 import pickle
+import time
 import json
-import time 
+from types import SimpleNamespace 
 
 import torch 
 import torch.distributed as dist
-import torch.distributed.rpc as rpc 
 import torch.multiprocessing as mp
-from torch.nn import BCEWithLogitsLoss, MSELoss
+from torch.nn import BCEWithLogitsLoss
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.optim import Adam
+from torch.optim import Adam, Adagrad
+from sklearn.model_selection import KFold
 
-from emb_train import sample
-from gan_test import test_emb_input
-from models.utils import reset_all_weights
-from models.emb_gan import GCNDiscriminator
+from models.gan import GCNDiscriminator, NodeGeneratorTopology, NodeGenerator, NodeGeneratorPerturb
+from gan_test import score_many
 
-EMBED_SIZE = 1
+N_JOBS = 8 # How many worker processes will train the model
+P_THREADS = 2 # How many threads each worker gets
 
-N_JOBS = 4 # How many worker processes will train the model
-P_THREADS = 4 # About the point of diminishing returns from experiments
+TRAIN_GRAPHS = [i for i in range(1,25)]
+
+# TODO incorporate all days
+DAY = 23
+DATA_HOME = 'inputs/Sept%d/benign/' % DAY
+TEST_HOME = 'inputs/Sept%d/mal/' % DAY
 
 criterion = BCEWithLogitsLoss()
-mse = MSELoss()
 
-TRUE_VAL = 0.1
-FALSE_VAL = 1.
+ALPHA = 0.5
+BETA = 0.1
+GAMMA = 1
+DELTA = 1
 
-# Just need it to keep going a few epochs
-# Too long and it overfits
-EPOCHS = 100
+HYPERPARAMS = SimpleNamespace(
+    g_latent=4, g_hidden=256,
+    d_hidden=64, 
+    g_lr=0.00025, d_lr=0.00025, 
+    epochs=25
+)
 
-D_LR=0.001
-G_LR=0.001
+# Decide which architecture to use here
+NodeGen = NodeGeneratorPerturb
+NodeDisc = GCNDiscriminator
 
-def disc_step(z, graph, gen, disc, g_opt, d_opt):
-    # Positive samples & train embedder
-	d_opt.zero_grad()
-	
-	# Improve stability
-	disc.train()
-	gen.eval()
+def gen_step(nodes, graph, gen, disc):
+    fake = gen(graph, nodes)
+    f_preds = disc(fake, graph)
 
-	# Positive samples
-	t_preds = disc.forward(z, graph)
+    labels = torch.full(f_preds.size(), ALPHA)
+    encirclement_loss = criterion(f_preds, labels)
 
-	# Negative samples
-	fake = gen.forward(graph).detach()
-	f_preds = disc.forward(fake, graph)
+    #mu = torch.stack([gen(graph, nodes) for _ in range(10)]).mean(dim=0)
+    #dispersion_loss = (1 / ((fake-mu).pow(2)+1e-9).mean(dim=1)).mean()
+    
+    agitation_loss = (fake-nodes).pow(2).mean()
 
-	# Random samples
-	rand = torch.rand(graph.x.size(0), z.size(1))
-	r_preds = disc.forward(rand, graph)
-
-	# Calculate loss (combine true and false so only need
-	# one call to backward)
-	preds = torch.cat([t_preds, f_preds, r_preds], dim=1)
-	labels = torch.cat([
-		torch.full(t_preds.size(), TRUE_VAL),
-		torch.full(f_preds.size(), FALSE_VAL),
-		torch.full(r_preds.size(), FALSE_VAL)
-	], dim=1)
-
-	d_loss = criterion(preds, labels)
-	d_loss.backward()
-	d_opt.step()
-
-	return d_loss
-
-def gen_step(z, graph, gen, disc, g_opt, d_opt):
-    g_opt.zero_grad()
-	
-    disc.eval()
-    gen.train()
-
-    fake = gen(graph)
-    g_loss = mse(fake, z)
-
-    #preds = disc(fake, graph)
-    #labels = torch.full(preds.size(), 0.)
-    #g_loss = criterion(preds, labels)
-
-    g_loss.backward()
-    g_opt.step()
-	
+    g_loss = encirclement_loss + DELTA*agitation_loss 
     return g_loss
 
+
+def disc_step(nodes, graph, gen, disc):
+	# Positive samples
+	t_preds = disc.forward(nodes, graph)
+
+	# Negative samples
+	fake = gen.forward(graph, nodes).detach()
+	f_preds = disc.forward(fake, graph)
+
+	t_loss = criterion(t_preds, torch.zeros(t_preds.size()))
+	f_loss = criterion(f_preds, torch.full(f_preds.size(), 1.))
+
+    # Optimize to identify real samples over fake samples
+	d_loss = t_loss + GAMMA*f_loss
+	return d_loss
+
+
 def data_split(graphs, workers):
-    min_jobs = [len(graphs) // workers] * workers
-    remainder = len(graphs) % workers 
-    for i in range(remainder):
-        min_jobs[i] += 1
+	min_jobs = [len(graphs) // workers] * workers
+	remainder = len(graphs) % workers 
+	for i in range(remainder):
+		min_jobs[i] += 1
 
-    jobs = [0]
-    for j in min_jobs:
-        jobs.append(jobs[-1] + j)
+	jobs = [0]
+	for j in min_jobs:
+		jobs.append(jobs[-1] + j)
 
-    return jobs
+	return jobs
 
-def proc_job(rank, world_size, all_graphs, jobs, val):
+
+def proc_job(rank, world_size, all_graphs, jobs, hp, val):
     # DDP info
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = '42069'
     dist.init_process_group("gloo", rank=rank, world_size=world_size)
-    
+
     # Sets number of threads used by this worker
     torch.set_num_threads(P_THREADS)
 
@@ -112,90 +102,134 @@ def proc_job(rank, world_size, all_graphs, jobs, val):
     for gid in range(jobs[rank], jobs[rank+1]):
         with open(DATA_HOME + 'graph%d.pkl' % all_graphs[gid], 'rb') as f:
             my_graphs.append(pickle.load(f))
-        with open(DATA_HOME + 'nodes%d.pkl' % all_graphs[gid], 'rb') as f:
-            my_nodes.append(pickle.load(f))
-
-    emb = torch.load('saved_models/embedder/emb_%d.pkl' % EMBED_SIZE)
-    emb.eval()
+        
+        my_nodes.append(torch.load(DATA_HOME + 'emb%d.pkl' % all_graphs[gid]))
 
     if rank == 0:
-        with open('inputs/mal/graph201.pkl', 'rb') as f:
-            test_graph = pickle.load(f)
-        with open('inputs/mal/nodes201.pkl', 'rb') as f:
-            test_nodes = pickle.load(f)
-        with torch.no_grad():
-            test_embs = emb(sample(test_nodes, max_samples=50))
-    
-    my_embs = []
-    for nodes in my_nodes:
-        with torch.no_grad():
-            my_embs.append(emb(sample(nodes, max_samples=50)))
+        print(hp)
 
-    del my_nodes 
-    del emb 
+    gen = NodeGen(
+        my_nodes[0].size(1), 
+        hp.g_latent, 
+        hp.g_hidden, 
+        my_nodes[0].size(1)
+    )
 
-    print("Worker %d finished loading" % rank)
-
-    gen = torch.load('saved_models/embedder/gen_%d.pkl' % EMBED_SIZE) 
-    disc = torch.load('saved_models/embedder/disc_%d.pkl' % EMBED_SIZE) 
-
-    #reset_all_weights(gen)
-    #reset_all_weights(disc)
+    disc = NodeDisc(my_nodes[0].size(1), hp.d_hidden)
 
     # Initialize shared models
     gen = DDP(gen)
     disc = DDP(disc)
 
     # Initialize optimizers
-    d_opt = Adam(disc.parameters(), lr=D_LR)
-    g_opt = Adam(gen.parameters(), lr=G_LR)
-    
-    with open('testlog.txt', 'w+') as f:
-        f.write("AUC\tAP\tPr\tRe\n")
+    d_opt = Adam(disc.parameters(), lr=hp.d_lr, betas=(0.5, 0.999))
+    g_opt = Adam(gen.parameters(), lr=hp.g_lr, betas=(0.5, 0.999))
 
     num_samples = len(my_graphs)
-    for e in range(EPOCHS):
+
+    # Best validation score
+    best = 0.
+
+    for e in range(hp.epochs):
         for i,j in enumerate(torch.randperm(num_samples)):
-            st = time.time()
-            args = (
-                my_embs[j], my_graphs[j],
-                gen, disc, g_opt, d_opt
-            )
+            st = time.time() 
+            
+            # Train generator
+            gen.train(); disc.eval(); disc.requires_grad=False
+            g_opt.zero_grad()
+            g_loss = gen_step(my_nodes[j], my_graphs[j], gen, disc)
+            g_loss.backward()
 
-            g_loss = gen_step(*args)
-            d_loss = disc_step(*args)
+            # Train discriminator
+            gen.eval(); disc.train(); disc.requires_grad=True
+            d_opt.zero_grad()
+            d_loss = disc_step(my_nodes[j], my_graphs[j], gen, disc)
+            d_loss.backward()
 
+            g_opt.step()
+            d_opt.step()
+
+            # Synchronize loss vals across workers
+            dist.all_reduce(d_loss)
+            dist.all_reduce(g_loss)
+
+            # Average across workers (doesn't really matter, just for readability)
+            d_loss/=N_JOBS; g_loss/=N_JOBS
             if rank == 0:
-                print(
-                    '[%d-%d] Disc Loss: %0.4f  Gen Loss: %0.4f (%0.2fs)' % 
-                    (e, i, d_loss, g_loss, time.time()-st),
+                out_str = ( 
+                    "[%d-%d] Disc: %0.4f, Gen: %0.4f (%0.2fs)\n" 
+                    % (e, i, d_loss.item(), g_loss.item(), time.time()-st)
                 )
 
-                auc,ap,pr = test_emb_input(test_embs, test_nodes, test_graph, disc)
-                
-                print('AUC: ', auc, 'AP: ', ap)
-                #print("Top-k (Pr/Re):\n%s" % json.dumps(pr, indent=2))
-                #print()
+                auc, ap, pr_re = score_many(val, disc, DAY)
+                out_str += 'AUC: %f  AP:  %f\n' % (auc,ap)
+                out_str += json.dumps(pr_re, indent=1)
 
-                with open('testlog.txt', 'a+') as f:
-                    f.write('%f\t%f\t%f\t%f\n' % (auc, ap, pr[200][0], pr[200][1]))
+                print(out_str)
 
+                with open('testlog.txt', 'a') as f:
+                    f.write('%f\t%f\t%f\t%f\n' % (d_loss.item(), g_loss.item(), auc, ap))
 
+                if ap > best: 
+                    torch.save(
+                        (disc.module.state_dict(), disc.module.args, disc.module.kwargs), 
+                        'saved_models/detector/disc.pkl'
+                    )
+                    best = ap
+            
+            dist.barrier() 
     dist.barrier()
+
+    # Cleanup
     if rank == 0:
         dist.destroy_process_group()
 
 
-TRAIN_GRAPHS = [i for i in range(1,25)]
-DATA_HOME = 'inputs/benign/'
-def main():
+def kfold_validate():
+    world_size = min(N_JOBS, len(TRAIN_GRAPHS))
+    jobs = data_split(TRAIN_GRAPHS, world_size)
+
+    with open('results/out.txt', 'w+') as f:
+        f.write(str(HYPERPARAMS)+'\n\n')
+        f.write('AUC\tAP\n')
+
+    kfold = KFold(n_splits=5)
+    test_graphs = torch.tensor([[201,402,660,104,205,321,255,355,503,462,559,419,609,771,955,874]]).T
+
+    for te,va in kfold.split(test_graphs): 
+        test = test_graphs[te].squeeze(-1)
+        val = test_graphs[va].squeeze(-1)
+
+        print("Testing:   ", test)
+        print("Validating:", val)
+
+        mp.spawn(proc_job,
+            args=(world_size,TRAIN_GRAPHS,jobs,HYPERPARAMS,val),
+            nprocs=world_size,
+            join=True)
+
+        sd, args, kwargs = torch.load('saved_models/detector/disc.pkl')
+        best_d = NodeDisc(*args, **kwargs)
+        best_d.load_state_dict(sd)
+
+        auc,ap,pr = score_many(test, best_d, DAY)
+        print("AUC: ",auc,'AP: ',ap)
+        print('Pr/Re')
+        print(json.dumps(pr))
+
+        with open('results/out.txt', 'w+') as f:
+            f.write('%f\t%f\n'%(auc,ap))
+        
+        
+
+if __name__ == '__main__':
+    '''
     world_size = min(N_JOBS, len(TRAIN_GRAPHS))
     jobs = data_split(TRAIN_GRAPHS, world_size)
 
     mp.spawn(proc_job,
-        args=(world_size,TRAIN_GRAPHS,jobs,21),
+        args=(world_size,TRAIN_GRAPHS,jobs,HYPERPARAMS,[201]),
         nprocs=world_size,
         join=True)
-
-if __name__ == '__main__':
-    main()
+    '''
+    kfold_validate()

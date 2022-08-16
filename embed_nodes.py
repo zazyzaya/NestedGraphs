@@ -1,69 +1,42 @@
 import glob 
 import pickle
+import sys
 
 import torch 
 from tqdm import tqdm 
 
-from emb_train import sample 
+from models.embedder import NodeEmbedderSelfAttention
+from sim_cse import sample_all
 
-strip_gid = lambda x : x[19:].split('.')[0]
-strip_gid_mal = lambda x : x[16:].split('.')[0]
+strip_gid = lambda x : x.split('/')[-1].split('.')[0][5:]
 
-'''
-model = torch.load('saved_models/embedder/emb_final.pt')
+sd,args,kwargs = torch.load('saved_models/embedder/emb_lr1e4_170epochs.pkl')
+model = NodeEmbedderSelfAttention(*args, **kwargs)
+model.load_state_dict(sd)
 model.eval() 
 
-print("Embedding 32 dim benign hosts")
-for fname in tqdm(glob.glob('inputs/benign/nodes*.pkl')):
+DAY = int(sys.argv[1])
+
+torch.set_num_threads(8)
+print("Embedding benign hosts")
+for fname in tqdm(glob.glob('inputs/Sept%d/benign/nodes*.pkl' % DAY)):
     gid = strip_gid(fname)
     with open(fname, 'rb') as f:
         nodes = pickle.load(f)
 
-    data = sample(nodes)
+    data = sample_all(nodes)
     with torch.no_grad():
         zs = model(data)
-    with open('inputs/benign/emb%s_32.pkl' % gid, 'wb+') as f:
-        pickle.dump(zs, f)
+        torch.save(zs, 'inputs/Sept%d/benign/emb%s.pkl' % (DAY,gid))
 
-print("Embedding 32 dim malicious hosts")
-for fname in tqdm(glob.glob('inputs/mal/nodes*.pkl')):
-    gid = strip_gid_mal(fname)
-    print(gid)
-    with open(fname, 'rb') as f:
-        nodes = pickle.load(f)
-
-    data = sample(nodes)
-    with torch.no_grad():
-        zs = model(data)
-
-    with open('inputs/mal/emb%s_32.pkl' % gid, 'wb+') as f:
-        pickle.dump(zs, f)
-'''
-model = torch.load('saved_models/embedder/emb_64.pt')
-model.eval() 
-
-print("Embedding 64 dim benign hosts")
-for fname in tqdm(glob.glob('inputs/benign/nodes*.pkl')):
+print("Embedding malicious hosts")
+for fname in tqdm(glob.glob('inputs/Sept%d/mal/nodes*.pkl' % DAY)):
     gid = strip_gid(fname)
-    with open(fname, 'rb') as f:
-        nodes = pickle.load(f)
-
-    data = sample(nodes)
-    with torch.no_grad():
-        zs = model(data)
-    with open('inputs/benign/emb%s_64.pkl' % gid, 'wb+') as f:
-        pickle.dump(zs, f)
-
-print("Embedding 64 dim malicious hosts")
-for fname in tqdm(glob.glob('inputs/mal/nodes*.pkl')):
-    gid = strip_gid_mal(fname)
     print(gid)
     with open(fname, 'rb') as f:
         nodes = pickle.load(f)
 
-    data = sample(nodes)
+    data = sample_all(nodes)
     with torch.no_grad():
         zs = model(data)
-
-    with open('inputs/mal/emb%s_64.pkl' % gid, 'wb+') as f:
-        pickle.dump(zs, f)
+        torch.save(zs, 'inputs/Sept%d/mal/emb%s.pkl' % (DAY,gid))

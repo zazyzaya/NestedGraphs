@@ -13,8 +13,8 @@ from torch.nn import BCEWithLogitsLoss, MSELoss
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import Adam, Adagrad
 
-from models.hostlevel import NodeEmbedderSelfAttention
-from models.emb_gan import GCNDiscriminator, NodeGenerator, NodeGeneratorTopology
+from models.embedder import NodeEmbedderSelfAttention
+from models.gan import GCNDiscriminator, NodeGenerator, NodeGeneratorTopology, NodeGeneratorPerturb
 from models.utils import kld_gauss
 from gan_test import test_emb_input
 
@@ -67,15 +67,16 @@ D_STEPS = 3
 
 # Decide which architecture to use here
 NodeEmb = NodeEmbedderSelfAttention
-# NodeGen = NodeGeneratorTopology  # hyperparam
-GEN_TOPOLOGY = False
+NodeGen = NodeGeneratorPerturb  # hyperparam
+#GEN_TOPOLOGY = False
 NodeDisc = GCNDiscriminator
 
-def sample(nodes, max_samples=256):
-	return{
-		'regs': nodes.sample_feat('regs', max_samples=max_samples),
-		'files': nodes.sample_feat('files', max_samples=max_samples)
+def sample(nodes, batch_size=64, max_samples=128, rnd=True):    
+	return {
+		'regs': nodes.sample_feat('regs', batch=b, max_samples=max_samples),
+        'files': nodes.sample_feat('files', batch=b, max_samples=max_samples)
 	}
+        
 
 def get_emb(nodes, emb, ms=MAX_SAMPLES):
 	data = sample(nodes, max_samples=ms)
@@ -124,18 +125,19 @@ def gen_step(z, data, nodes, graph, emb, gen, disc, e_opt, g_opt, d_opt, verbose
 	disc.eval()
 	gen.train()
 
-	fake = gen(graph)
+	fake = gen(graph, z)
 	f_preds = disc(fake, graph)
 
 	labels = torch.full(f_preds.size(), ALPHA)
 	encirclement_loss = criterion(f_preds, labels)
 	
-	mu = fake.mean(dim=0)
-	dispersion_loss = (1 / ((fake-mu).pow(2)+1e-9)).mean()
+	#mu = fake.mean(dim=0)
+	#dispersion_loss = (1 / ((fake-mu).pow(2)+1e-9)).mean()
 
 	#print(encirclement_loss, dispersion_loss)
+	agitation_loss = (fake-nodes).pow(2).mean()
 
-	g_loss = encirclement_loss + BETA*dispersion_loss
+	g_loss = encirclement_loss + agitation_loss #+ BETA*dispersion_loss
 	g_loss.backward()
 	g_opt.step()
 	
@@ -154,7 +156,7 @@ def disc_step(z, data, nodes, graph, emb, gen, disc, e_opt, g_opt, d_opt):
 	t_preds = disc.forward(z, graph)
 
 	# Negative samples
-	fake = gen.forward(graph).detach()
+	fake = gen.forward(graph, z).detach()
 	f_preds = disc.forward(fake, graph)
 
 	t_loss = criterion(t_preds, torch.zeros(t_preds.size()))

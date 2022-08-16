@@ -251,6 +251,7 @@ class HostGraph(Data):
         # Will be filled and converted to tensors eventually
         self.src, self.dst = [],[] # To be converted to edge_index
         self.edge_attr = []
+        self.edge_ts = []
         self.x = []
         self.node_times = []
 
@@ -267,7 +268,7 @@ class HostGraph(Data):
             self.x.append(feat)
             self.node_times.append(ts)
 
-    def add_edge(self, ts, pid, ppid, feat, pfeat, nodelist):
+    def add_edge(self, ts, pid, ppid, feat, pfeat, rel, nodelist):
         assert not self.ready, 'add_edge undefined after self.finalize() has been called'
 
         self.add_node(ts, ppid, pfeat, nodelist)
@@ -278,7 +279,9 @@ class HostGraph(Data):
 
         self.src.append(nodelist.node_map[ppid])
         self.dst.append(nodelist.node_map[pid])
-        self.edge_attr.append(ts)
+        
+        self.edge_attr.append(rel)
+        self.edge_ts.append(ts)
 
     
     def finalize(self):
@@ -294,5 +297,6 @@ class HostGraph(Data):
         self.edge_index = torch.tensor([self.src, self.dst])
         self.x = torch.stack(self.x)
         self.num_nodes = self.x.size(0)
+        self.edge_ts = torch.tensor(self.edge_ts)
         self.edge_attr = torch.tensor(self.edge_attr)
         self.node_times = torch.tensor(self.node_times)

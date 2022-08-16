@@ -17,7 +17,7 @@ from dateutil.parser import isoparse
 
 # globals
 JOBS=16
-HOME='/mnt/raid0_24TB/isaiah/data/nested_optc/'
+HOME='/mnt/raid0_24TB/isaiah/data/nested_optc/25/'
 IP_MAP=HOME+'ipmap.pkl'
 
 # mappings
@@ -65,9 +65,11 @@ feat_map = {
 
 # Grab files we want
 eval_23sept = glob.glob("/mnt/raid0_24TB/datasets/NCR2/ecar/evaluation/23Sep*/*/*.json*")
-file_paths = []
+eval_24sept = glob.glob("/mnt/raid0_24TB/datasets/NCR2/ecar/evaluation/24Sep*/*/*.json*")
+eval_25sept = glob.glob("/mnt/raid0_24TB/datasets/NCR2/ecar/evaluation/25Sep*/*/*.json*")
 
-for f in eval_23sept:
+file_paths = []
+for f in eval_25sept:
     file_paths.append(f)
 
 
@@ -403,6 +405,7 @@ def load_group(fid, file_path, total):
                     image_path = None
                 feature_vector = [pid, ppid, key, value, image_path]
 
+            ''' No longer looking at modules
             if row['object'] == 'MODULE':
                 is_row_selected = True
                 file_name = row['hostname'].split('.')[0].lower()+'.csv'
@@ -417,13 +420,16 @@ def load_group(fid, file_path, total):
                 else:
                     module_path = None
                 feature_vector = [pid, ppid, image_path, module_path]
+            '''
 
+            '''
             if is_row_selected == True:
                 is_anomaly = 1 if is_anomalous_log(row) else 0
                 with open(HOME + file_name, "a+") as fa:
                     parsed_row = [row['timestamp'], row['object'], row['action'], feature_vector]#, is_anomaly]
                     writer = csv.writer(fa)
                     writer.writerow(parsed_row)
+            '''
 
 if __name__ == '__main__':
     # Load in all paths in parallel
