@@ -15,6 +15,7 @@ from sklearn.model_selection import KFold
 
 from models.gan import GCNDiscriminator, NodeGeneratorTopology, NodeGenerator, NodeGeneratorPerturb
 from gan_test import score_many
+from graph_utils import compress_ei
 
 N_JOBS = 8 # How many worker processes will train the model
 P_THREADS = 2 # How many threads each worker gets
@@ -30,25 +31,27 @@ criterion = BCEWithLogitsLoss()
 
 ALPHA = 0.5
 BETA = 0.1
-GAMMA = 1
+GAMMA = 1.
 DELTA = 1
 
 HYPERPARAMS = SimpleNamespace(
     g_latent=4, g_hidden=256,
     d_hidden=64, 
     g_lr=0.00025, d_lr=0.00025, 
-    epochs=25
+    epochs=25,
+    alpha=ALPHA, beta=BETA, 
+    gamma=GAMMA, delta=DELTA
 )
 
 # Decide which architecture to use here
 NodeGen = NodeGeneratorPerturb
 NodeDisc = GCNDiscriminator
 
-def gen_step(nodes, graph, gen, disc):
+def gen_step(hp, nodes, graph, gen, disc):
     fake = gen(graph, nodes)
     f_preds = disc(fake, graph)
 
-    labels = torch.full(f_preds.size(), ALPHA)
+    labels = torch.full(f_preds.size(), hp.alpha)
     encirclement_loss = criterion(f_preds, labels)
 
     #mu = torch.stack([gen(graph, nodes) for _ in range(10)]).mean(dim=0)
@@ -56,11 +59,11 @@ def gen_step(nodes, graph, gen, disc):
     
     agitation_loss = (fake-nodes).pow(2).mean()
 
-    g_loss = encirclement_loss + DELTA*agitation_loss 
+    g_loss = encirclement_loss + hp.delta*agitation_loss 
     return g_loss
 
 
-def disc_step(nodes, graph, gen, disc):
+def disc_step(hp, nodes, graph, gen, disc):
 	# Positive samples
 	t_preds = disc.forward(nodes, graph)
 
@@ -72,7 +75,7 @@ def disc_step(nodes, graph, gen, disc):
 	f_loss = criterion(f_preds, torch.full(f_preds.size(), 1.))
 
     # Optimize to identify real samples over fake samples
-	d_loss = t_loss + GAMMA*f_loss
+	d_loss = t_loss + hp.gamma*f_loss
 	return d_loss
 
 
@@ -104,6 +107,8 @@ def proc_job(rank, world_size, all_graphs, jobs, hp, val):
             my_graphs.append(pickle.load(f))
         
         my_nodes.append(torch.load(DATA_HOME + 'emb%d.pkl' % all_graphs[gid]))
+
+    [compress_ei(g) for g in my_graphs]
 
     if rank == 0:
         print(hp)
@@ -137,13 +142,13 @@ def proc_job(rank, world_size, all_graphs, jobs, hp, val):
             # Train generator
             gen.train(); disc.eval(); disc.requires_grad=False
             g_opt.zero_grad()
-            g_loss = gen_step(my_nodes[j], my_graphs[j], gen, disc)
+            g_loss = gen_step(hp, my_nodes[j], my_graphs[j], gen, disc)
             g_loss.backward()
 
             # Train discriminator
             gen.eval(); disc.train(); disc.requires_grad=True
             d_opt.zero_grad()
-            d_loss = disc_step(my_nodes[j], my_graphs[j], gen, disc)
+            d_loss = disc_step(hp, my_nodes[j], my_graphs[j], gen, disc)
             d_loss.backward()
 
             g_opt.step()
@@ -185,13 +190,13 @@ def proc_job(rank, world_size, all_graphs, jobs, hp, val):
         dist.destroy_process_group()
 
 
-def kfold_validate():
+def kfold_validate(hp):
     world_size = min(N_JOBS, len(TRAIN_GRAPHS))
     jobs = data_split(TRAIN_GRAPHS, world_size)
 
-    with open('results/out.txt', 'w+') as f:
-        f.write(str(HYPERPARAMS)+'\n\n')
-        f.write('AUC\tAP\n')
+    with open('results/out.txt', 'a+') as f:
+        f.write(str(hp)+'\n\n')
+        f.write('AUC\tAP\tTop-k Pr/Re\n')
 
     kfold = KFold(n_splits=5)
     test_graphs = torch.tensor([[201,402,660,104,205,321,255,355,503,462,559,419,609,771,955,874]]).T
@@ -204,7 +209,7 @@ def kfold_validate():
         print("Validating:", val)
 
         mp.spawn(proc_job,
-            args=(world_size,TRAIN_GRAPHS,jobs,HYPERPARAMS,val),
+            args=(world_size,TRAIN_GRAPHS,jobs,hp,val),
             nprocs=world_size,
             join=True)
 
@@ -217,8 +222,11 @@ def kfold_validate():
         print('Pr/Re')
         print(json.dumps(pr))
 
-        with open('results/out.txt', 'w+') as f:
-            f.write('%f\t%f\n'%(auc,ap))
+        with open('results/out.txt', 'a') as f:
+            f.write('%f\t%f\t%s\n'%(auc,ap,json.dumps(pr)))
+
+    with open('results/out.txt', 'a') as f:
+        f.write('\n\n')
         
         
 
@@ -232,4 +240,12 @@ if __name__ == '__main__':
         nprocs=world_size,
         join=True)
     '''
-    kfold_validate()
+    hp = HYPERPARAMS
+    for alpha in [0.9,0.7,0.5,0.3,0.1]:
+        for latent in [0,4,8,16,32,64]:
+            for gamma in [0.1,1]:
+                hp.alpha = alpha 
+                hp.gamma = gamma
+                hp.g_latent = latent 
+
+                kfold_validate(hp)

@@ -7,6 +7,24 @@ from torch_geometric.nn import GATConv, GCNConv, GatedGraphConv
 from .embedder import Time2Vec2d
 from .tree_gru import TreeGRUConv
 
+class DropEdge(nn.Module):
+    def __init__(self, p=0.25):
+        super().__init__()
+        self.p = p 
+
+    def forward(self, ei, ew=None):
+        if self.training:
+            mask = torch.zeros(ei.size(1), dtype=torch.bool)
+            prob = torch.rand(mask.size())
+            mask[prob >= self.p] = True 
+            
+            if ew is not None:
+                return ei[:, mask], ew[mask] 
+
+            return ei[:, mask], ew
+        
+        return ei, ew
+
 class NodeGenerator(nn.Module):
     '''
     The previous model is so successful when not reparameterizing, 
@@ -50,8 +68,9 @@ class NodeGeneratorTopology(nn.Module):
         self.conv2 = GCNConv(hidden_feats, hidden_feats)
         self.act = nn.RReLU()
         self.drop = nn.Dropout(0.25)
-        self.lin = nn.Linear(hidden_feats, out_feats)
+        self.drop_edge = DropEdge(0.5)
 
+        self.lin = nn.Linear(hidden_feats, out_feats)
         self.static_dim = static_dim
 
     def forward(self, graph):
@@ -61,8 +80,21 @@ class NodeGeneratorTopology(nn.Module):
                 x, torch.rand(x.size(0), self.static_dim)
             ], dim=1)
 
-        x = self.drop(self.act(self.conv1(x, graph.edge_index)))
-        x = self.drop(self.act(self.conv2(x, graph.edge_index)))
+        if hasattr(graph, 'edge_weight'):
+            ew = graph.edge_weight
+        else:
+            ew = None
+
+        x = self.drop(
+            self.act(
+                self.conv1(x, *self.drop_edge(graph.edge_index, ew))
+            )
+        )
+        x = self.drop(
+            self.act(
+                self.conv2(x, *self.drop_edge(graph.edge_index, ew))
+            )
+        )
         return self.lin(x)
 
 
@@ -93,16 +125,30 @@ class GATDiscriminator(nn.Module):
         self.gat1 = GATConv(emb_feats, hidden_feats, heads=heads)
         self.gat2 = GATConv(hidden_feats*heads, hidden_feats, heads=heads)
         self.lin = nn.Linear(hidden_feats*heads, 1)
+        
         self.drop = nn.Dropout(0.25)
+        self.drop_edge = DropEdge(0.5)
 
 
     def forward(self, z, graph):
         #x = torch.cat([z,graph.x], dim=1)
         # Experiments showed the graph node feats are unimportant
         # saves a bit of time, and shrinks the model a touch
+        if hasattr(graph, 'edge_weight'):
+            ew = graph.edge_weight
+        else:
+            ew = None
 
-        x = self.drop(torch.tanh(self.gat1(z, graph.edge_index)))
-        x = self.drop(torch.tanh(self.gat2(x, graph.edge_index)))
+        x = self.drop(
+            torch.tanh(
+                self.gat1(z, *self.drop_edge(graph.edge_index, ew))
+            )
+        )
+        x = self.drop(
+            torch.tanh(
+                self.gat2(x, *self.drop_edge(graph.edge_index, ew))
+            )
+        )
         
         # Sigmoid applied later. Using BCE loss w Logits
         return self.lin(x)

@@ -1,3 +1,0 @@
-namespace(g_latent=4, g_hidden=256, d_hidden=64, g_lr=0.00025, d_lr=0.00025, epochs=25)
-
-AUC	AP

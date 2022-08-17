@@ -23,8 +23,8 @@ DATA_HOME = '/mnt/raid0_24TB/isaiah/code/NestedGraphs/inputs/Sept%d/benign/'%DAY
 HYPERPARAMS = SimpleNamespace(
     emb_hidden=256, emb_t_hidden=1024, emb_out=256,
     attn_kw = {'heads': 8, 'layers': 4}, t2v=64,
-    emb_lr=0.0001, epochs=10000, 
-    max_samples=128, batch_size=64
+    emb_lr=0.001, epochs=3, 
+    max_samples=128, batch_size=16, mean=True
 )
 
 def sample(nodes, batch_size=64, max_samples=128, rnd=True):
@@ -86,10 +86,8 @@ def emb_step(emb, data, tau=0.05):
 
 
 def train_loop(rank, all_graphs, jobs, hp, is_dist=True):
-    my_graphs=[]; my_nodes=[]
+    my_nodes=[]
     for gid in range(jobs[rank], jobs[rank+1]):
-        with open(DATA_HOME + 'graph%d.pkl' % all_graphs[gid], 'rb') as f:
-            my_graphs.append(pickle.load(f))
         with open(DATA_HOME + 'nodes%d.pkl' % all_graphs[gid], 'rb') as f:
             my_nodes.append(pickle.load(f))
 
@@ -98,7 +96,8 @@ def train_loop(rank, all_graphs, jobs, hp, is_dist=True):
         my_nodes[0].reg_dim, 
         hp.emb_hidden, hp.emb_t_hidden, hp.emb_out,
         attn_kw=hp.attn_kw,
-        t2v_dim=hp.t2v
+        t2v_dim=hp.t2v,
+        mean=hp.mean
     )
 
     # For debugging without multiprocessing
@@ -108,40 +107,39 @@ def train_loop(rank, all_graphs, jobs, hp, is_dist=True):
     opt = Adam(emb.parameters(), lr=hp.emb_lr)
     emb.train()
 
-    num_samples = len(my_graphs)
+    num_samples = len(my_nodes)
 
     # Best loss 
     best = float('inf')
     for e in range(hp.epochs):
         for i,j in enumerate(torch.randperm(num_samples)):
-            st = time.time() 
+            
+            for b, data in enumerate(sample(my_nodes[j], batch_size=hp.batch_size, max_samples=hp.max_samples)):
+                st = time.time() 
 
-            opt.zero_grad()
-            data = sample_one(my_nodes[j], batch_size=hp.batch_size, max_samples=hp.max_samples)
+                opt.zero_grad()
+                loss = emb_step(emb, data)
+                loss.backward()
+                opt.step()
 
-            #prog = tqdm(total=my_nodes[j].num_nodes//hp.batch_size)
-            #for data in data_loader:
-            loss = emb_step(emb, data)
-            loss.backward()
-            opt.step()
+                # Synchronize loss vals across workers
+                if is_dist:
+                    dist.all_reduce(loss, op=dist.ReduceOp.MAX)
 
-            # Synchronize loss vals across workers
-            if is_dist:
-                dist.all_reduce(loss, op=dist.ReduceOp.MAX)
+                if rank==0:
+                    print('[%d-%d-%d] Loss: %0.4f    (%0.2fs)' % (e,i,b,loss.item(),time.time()-st))
 
-            if rank==0:
-                print('[%d-%d] Loss: %0.4f    (%0.2fs)' % (e,i,loss.item(),time.time()-st))
+            # Purely unsupervised, so just save model periodically, assuming 
+            # it's getting better with time
+            dist.barrier() 
+            if rank==0: 
+                name = '_mean' if hp.mean else '_cls'
+                torch.save(
+                    (emb.module.state_dict(), emb.module.args, emb.module.kwargs), 
+                    'saved_models/embedder/emb%s.pkl' % name
+                )
 
-        # Purely unsupervised, so just save model periodically, assuming 
-        # it's getting better with time
-        dist.barrier() 
-        if rank==0: 
-            torch.save(
-                (emb.module.state_dict(), emb.module.args, emb.module.kwargs), 
-                'saved_models/embedder/emb.pkl'
-            )
-
-        dist.barrier()
+            dist.barrier()
     
 
 def proc_job(rank, world_size, all_graphs, jobs, hp):

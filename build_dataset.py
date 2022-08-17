@@ -2,7 +2,7 @@ import sys
 import pickle as pkl
 from preprocessing.build_hostgraph import build_graphs
 
-DAY = 23 #int(sys.argv[1])
+DAY = int(sys.argv[1])
 
 # Benign
 bids = list(range(1,26))
@@ -16,6 +16,7 @@ for i in range(len(bids)):
     with open('inputs/Sept%d/benign/nodes%d.pkl' % (DAY,id), 'wb+') as f:
         pkl.dump(n, f)
 
+'''
 # Mal
 mids = [201,402,660,104,205,321,255,355,503,462,559,419,609,771,955,874,170]
 malicious = build_graphs(mids, DAY)
@@ -27,3 +28,4 @@ for i in range(len(mids)):
         pkl.dump(g, f)
     with open('inputs/Sept%d/mal/nodes%d.pkl' % (DAY,id), 'wb+') as f:
         pkl.dump(n, f)
+'''

@@ -55,10 +55,9 @@ class BuiltinAttention(nn.Module):
     as a list and only do one at a time, otherwise will quickly run out
     of memory 
     '''
-    def __init__(self, in_feats, hidden, t_hidden, out, heads=8, layers=4, proj_out=False):
+    def __init__(self, in_feats, hidden, t_hidden, out, heads=8, layers=4, mean=False):
         super().__init__() 
 
-        self.proj_out = proj_out
         self.layers = layers
         self.in_proj = nn.Sequential(
             nn.Linear(in_feats, hidden), 
@@ -66,7 +65,7 @@ class BuiltinAttention(nn.Module):
         )
 
         enc = nn.TransformerEncoderLayer(
-            hidden, heads, dim_feedforward=t_hidden, dropout=0.1
+            hidden, heads, dim_feedforward=t_hidden, dropout=0.1, activation=nn.GELU()
         )
         norm = nn.LayerNorm(hidden)
         self.trans = nn.TransformerEncoder(enc, layers, norm)
@@ -78,6 +77,8 @@ class BuiltinAttention(nn.Module):
         self.sep = nn.parameter.Parameter(
             torch.rand(1,1,hidden)
         )
+
+        self.mean = mean
 
     def forward(self, ts, x):
         x = packed_cat([ts, x])
@@ -102,39 +103,55 @@ class BuiltinAttention(nn.Module):
 
         x = self.trans(x, src_key_padding_mask=mask)
 
-        # Get result of special token
-        outs = x[0,:,:]
+        # Get result of special token or mean
+        if self.mean: 
+            outs = x.sum(dim=1) / seq_len 
+        else:
+            outs = x[0,:,:]
 
-        # Paper found that returning token w MLP during training is 
-        # effective, but not during testing
-        if self.training or self.proj_out:
-            return self.project(outs)
-        else: 
-            return outs 
+        return self.project(outs)
 
 
 class NodeEmbedderSelfAttention(nn.Module):
-    def __init__(self, f_feats, r_feats, hidden, t_hidden, out, 
-                t2v_dim=8, attn_kw={}, proj_out=False):
+    def __init__(self, in_feats, hidden, t_hidden, out, heads, layers,
+                t2v_dim=8, mean=False):
 
         super().__init__()
 
-        self.args=(f_feats, r_feats, hidden, t_hidden, out)
-        self.kwargs=dict(t2v_dim=t2v_dim, attn_kw=attn_kw)
+        self.args=(in_feats, hidden, t_hidden, out, heads, layers)
+        self.kwargs=dict(t2v_dim=t2v_dim, mean=mean)
 
-        self.f_t2v = Time2Vec(t2v_dim)
-        self.r_t2v = Time2Vec(t2v_dim)
-        self.f_attn = BuiltinAttention(f_feats+t2v_dim, hidden, t_hidden, out, **attn_kw, proj_out=proj_out)
-        self.r_attn = BuiltinAttention(r_feats+t2v_dim, hidden, t_hidden, out, **attn_kw, proj_out=proj_out)
+        self.t2v = Time2Vec(t2v_dim)
+        self.attn = BuiltinAttention(in_feats+t2v_dim, hidden, t_hidden, out, heads=heads, layers=layers)
 
-    def forward(self, data, *args, **kwargs):
-        t,f = data['files']
-        f = self.f_attn(self.f_t2v(t), f)
+    def forward(self, ts,x, *args, **kwargs):
+        return self.attn(self.t2v(ts), x)
 
-        t,r = data['regs']
-        r = self.r_attn(self.r_t2v(t), r)
+class NodeDecoder(nn.Module):
+    def __init__(self, cls_feats, token_feats, hidden, layers, t2v_dim=8):
+        super().__init__()
 
-        #t,m = data['mods']
-        #m = self.m_attn(self.t2v(t), m)
+        self.t2v = Time2Vec(t2v_dim)
+        self.net = nn.Sequential(
+            nn.Linear(cls_feats+token_feats+t2v_dim, hidden), 
+            nn.ReLU(), 
+            *[
+                nn.Sequential(
+                    nn.Linear(hidden, hidden),
+                    nn.ReLU()
+                )
+            for _ in range(layers-1)], 
+            nn.Linear(hidden, 1)
+        )
 
-        return torch.cat([f,r], dim=1)
+    def forward(self, cls, t, x):
+        '''
+        Given Bxd cls tokens, and LxBxd' sequences of tokens
+        return logit of likelihood each element was in that sample 
+        '''
+        tokens = packed_cat([self.t2v(t), x])
+        tokens = pad_packed_sequence(tokens)[0]
+
+        cls = cls.repeat(tokens.size(0),1,1)
+        x = torch.cat([cls,tokens], dim=-1)
+        return self.net(x)

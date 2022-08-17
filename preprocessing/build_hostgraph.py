@@ -80,11 +80,11 @@ def build_graph(host: int, day: int):
     
     with open(SOURCE+'Sept%d/sysclient%04d.csv' % (day,host)) as f:
         line = f.readline()
-
         while(line):
             parse_line(g, nl, line)
             line = f.readline()
             prog.update()
+
 
     prog.close()
 

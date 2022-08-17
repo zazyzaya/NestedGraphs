@@ -422,14 +422,12 @@ def load_group(fid, file_path, total):
                 feature_vector = [pid, ppid, image_path, module_path]
             '''
 
-            '''
             if is_row_selected == True:
                 is_anomaly = 1 if is_anomalous_log(row) else 0
                 with open(HOME + file_name, "a+") as fa:
                     parsed_row = [row['timestamp'], row['object'], row['action'], feature_vector]#, is_anomaly]
                     writer = csv.writer(fa)
                     writer.writerow(parsed_row)
-            '''
 
 if __name__ == '__main__':
     # Load in all paths in parallel

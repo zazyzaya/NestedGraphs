@@ -1,5 +1,9 @@
 import json 
+
 import torch 
+from torch_geometric import nn as geo_nn
+from torch_geometric.utils import dense_to_sparse, add_remaining_self_loops
+
 HOME = '/mnt/raid0_24TB/isaiah/code/NestedGraphs/'
 
 def propagate_labels(g, day, label_f=HOME+'inputs/manual_labels.txt'):
@@ -32,3 +36,26 @@ def propagate_labels(g, day, label_f=HOME+'inputs/manual_labels.txt'):
 
     #labels[labels != 0] = 1/labels[labels!=0]
     return labels
+
+
+def compress_ei(g):
+    '''
+    Convert from multi-edge to weighted edge
+    This will of course ruin any edge feature vectors
+    '''
+    mp = geo_nn.MessagePassing(aggr='add')
+    x = torch.eye(g.num_nodes)
+    x = mp.propagate(
+        add_remaining_self_loops(g.edge_index)[0], 
+        x=x, size=None
+    )
+    
+    # Produces a weighted adjacency matrix
+    ei,ew = dense_to_sparse(x.clamp(0,1))
+    g.edge_index = ei
+    g.edge_weight = ew
+
+def only_type_edges(g, etype):
+    ei = g.edge_index 
+    ei = ei[:,g.edge_attr==etype]
+    g.edge_index = ei 
