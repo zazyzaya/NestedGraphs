@@ -30,17 +30,18 @@ TEST_HOME = 'inputs/Sept%d/mal/' % DAY
 criterion = BCEWithLogitsLoss()
 
 ALPHA = 0.5
-BETA = 0.1
-GAMMA = 1.
-DELTA = 1
+BETA = 1e-5
+GAMMA = 0.1
+DELTA = 0
 
 HYPERPARAMS = SimpleNamespace(
-    g_latent=4, g_hidden=256,
+    g_latent=64, g_hidden=256,
     d_hidden=64, 
     g_lr=0.00025, d_lr=0.00025, 
     epochs=25,
     alpha=ALPHA, beta=BETA, 
-    gamma=GAMMA, delta=DELTA
+    gamma=GAMMA, delta=DELTA,
+    emb_input=True
 )
 
 # Decide which architecture to use here
@@ -53,13 +54,19 @@ def gen_step(hp, nodes, graph, gen, disc):
 
     labels = torch.full(f_preds.size(), hp.alpha)
     encirclement_loss = criterion(f_preds, labels)
-
-    #mu = torch.stack([gen(graph, nodes) for _ in range(10)]).mean(dim=0)
-    #dispersion_loss = (1 / ((fake-mu).pow(2)+1e-9).mean(dim=1)).mean()
     
-    agitation_loss = (fake-nodes).pow(2).mean()
+    g_loss = encirclement_loss
 
-    g_loss = encirclement_loss + hp.delta*agitation_loss 
+    if hp.beta > 0: 
+        mu = torch.stack([gen(graph, nodes) for _ in range(10)]).mean(dim=0)
+        dispersion_loss = (1 / ((fake-mu).pow(2)+1e-9).mean(dim=1)).mean()
+        g_loss += hp.beta*dispersion_loss
+
+    # Only makes sense if we're doing the perturb gan
+    if hp.delta > 0 and hp.emb_input:
+        agitation_loss = (fake-nodes).pow(2).mean()
+        g_loss += hp.delta*agitation_loss 
+    
     return g_loss
 
 
@@ -113,12 +120,20 @@ def proc_job(rank, world_size, all_graphs, jobs, hp, val):
     if rank == 0:
         print(hp)
 
-    gen = NodeGen(
-        my_nodes[0].size(1), 
-        hp.g_latent, 
-        hp.g_hidden, 
-        my_nodes[0].size(1)
-    )
+    if hp.emb_input: 
+        gen = NodeGeneratorPerturb(
+            my_nodes[0].size(1),  
+            hp.g_latent, 
+            hp.g_hidden, 
+            my_nodes[0].size(1) 
+        )
+    else: 
+        gen = NodeGeneratorTopology(
+            my_graphs[0].x.size(1), 
+            hp.g_latent, 
+            hp.g_hidden, 
+            my_nodes[0].size(1) 
+        )
 
     disc = NodeDisc(my_nodes[0].size(1), hp.d_hidden)
 
@@ -142,7 +157,12 @@ def proc_job(rank, world_size, all_graphs, jobs, hp, val):
             # Train generator
             gen.train(); disc.eval(); disc.requires_grad=False
             g_opt.zero_grad()
-            g_loss = gen_step(hp, my_nodes[j], my_graphs[j], gen, disc)
+            g_loss = gen_step(
+                hp, 
+                my_nodes[j] if hp.emb_input else my_graphs[j], 
+                my_graphs[j], 
+                gen, disc
+            )
             g_loss.backward()
 
             # Train discriminator
@@ -242,10 +262,10 @@ if __name__ == '__main__':
     '''
     hp = HYPERPARAMS
     for alpha in [0.9,0.7,0.5,0.3,0.1]:
-        for latent in [0,4,8,16,32,64]:
+        for beta in [0,1e-5,1e-3]:
             for gamma in [0.1,1]:
                 hp.alpha = alpha 
                 hp.gamma = gamma
-                hp.g_latent = latent 
+                hp.beta = beta 
 
                 kfold_validate(hp)

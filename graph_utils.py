@@ -24,9 +24,13 @@ def propagate_labels(g, day, label_f=HOME+'inputs/manual_labels.txt'):
     for d in domain:
         labels[d] = 1
 
+    # Only consider direct parent-child relations for labeling
+    ei = g.edge_index 
+    ei = ei[:, g.edge_attr==0]
+
     while domain:
         mal = domain.pop()
-        children = g.edge_index[1][g.edge_index[0] == mal]
+        children = ei[1][ei[0] == mal]
 
         for c in children:
             # Troubling that there are loops in here..

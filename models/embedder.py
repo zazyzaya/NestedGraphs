@@ -127,6 +127,7 @@ class NodeEmbedderSelfAttention(nn.Module):
     def forward(self, ts,x, *args, **kwargs):
         return self.attn(self.t2v(ts), x)
 
+
 class NodeDecoder(nn.Module):
     def __init__(self, cls_feats, token_feats, hidden, layers, t2v_dim=8):
         super().__init__()
@@ -155,3 +156,20 @@ class NodeDecoder(nn.Module):
         cls = cls.repeat(tokens.size(0),1,1)
         x = torch.cat([cls,tokens], dim=-1)
         return self.net(x)
+
+
+class MultiEmbedder(nn.Module):
+    '''
+    Holds arbitrary number of NodeEmbedderSelfAttention models
+    that each embed a different feature
+    '''
+    def __init__(self, file_emb, reg_emb):
+        super().__init__()
+        self.f = file_emb 
+        self.r = reg_emb 
+
+    def forward(self, data):
+        f = self.f(*data['files'])
+        r = self.r(*data['regs'])
+
+        return torch.cat([f,r], dim=1)

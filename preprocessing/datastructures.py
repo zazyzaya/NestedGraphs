@@ -255,6 +255,10 @@ class HostGraph(Data):
         self.x = []
         self.node_times = []
 
+        # Keep track of each node's one-hop neighborhood for easier 
+        # TGAT convs if we use that 
+        self.one_hop = {}
+
         # Turns graph read-only after everything is built
         self.ready = False
 
@@ -283,6 +287,15 @@ class HostGraph(Data):
         self.edge_attr.append(rel)
         self.edge_ts.append(ts)
 
+        src_id = nodelist.node_map[ppid]
+        dst_id = nodelist.node_map[pid]
+
+        # Add src node to dst 1-hop neighborhood
+        d_neigh = self.one_hop.get(dst_id, [[],[]])
+        d_neigh[0].append(src_id)
+        d_neigh[1].append(ts)
+        self.one_hop[dst_id] = d_neigh
+
     
     def finalize(self):
         '''
@@ -294,9 +307,21 @@ class HostGraph(Data):
             return 
 
         self.ready = True 
+
+        # Turn everything into tensors
         self.edge_index = torch.tensor([self.src, self.dst])
         self.x = torch.stack(self.x)
         self.num_nodes = self.x.size(0)
         self.edge_ts = torch.tensor(self.edge_ts)
         self.edge_attr = torch.tensor(self.edge_attr)
         self.node_times = torch.tensor(self.node_times)
+
+        # Make sure edges are sorted by time
+        self.edge_ts, idx = self.edge_ts.sort()
+        self.edge_idx = self.edge_index[:,idx]
+        self.edge_attr = self.edge_attr[:,idx]
+
+        # Make 1-hops into tensors
+        for i in range(self.num_nodes):
+            neigh,ts = self.one_hop.get(i, [[],[]])
+            self.one_hop[i] = (torch.tensor(neigh), torch.tensor(ts))

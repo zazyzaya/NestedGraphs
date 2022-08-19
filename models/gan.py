@@ -73,7 +73,7 @@ class NodeGeneratorTopology(nn.Module):
         self.lin = nn.Linear(hidden_feats, out_feats)
         self.static_dim = static_dim
 
-    def forward(self, graph):
+    def forward(self, graph, *args):
         x = graph.x 
         if self.static_dim > 0:
             x = torch.cat([

@@ -116,7 +116,7 @@ def train(hp):
             (e, loss.item(), time.time()-st)
         )
 
-        torch.save((enc, enc.args, enc.kwargs), 'saved_models/embedder/%s_emb.pkl' % FEAT)
+        torch.save((enc.state_dict(), enc.args, enc.kwargs), 'saved_models/embedder/%s_emb.pkl' % FEAT)
 
 if __name__ == '__main__':
     train(HYPERPARAMS)
