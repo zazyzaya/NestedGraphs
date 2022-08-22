@@ -319,7 +319,7 @@ class HostGraph(Data):
         # Make sure edges are sorted by time
         self.edge_ts, idx = self.edge_ts.sort()
         self.edge_idx = self.edge_index[:,idx]
-        self.edge_attr = self.edge_attr[:,idx]
+        self.edge_attr = self.edge_attr[idx]
 
         # Make 1-hops into tensors
         for i in range(self.num_nodes):
