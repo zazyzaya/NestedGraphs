@@ -162,3 +162,15 @@ namespace(g_latent=64, g_hidden=256, d_hidden=64, g_lr=0.00025, d_lr=0.00025, ep
 
 AUC	AP	Top-k Pr/Re
 0.531421	0.000835	{"50": [0.0, 0.0], "100": [0.0, 0.0], "150": [0.0, 0.0], "200": [0.005, 0.041666666666666664]}
+namespace(g_latent=64, g_hidden=256, d_hidden=64, g_lr=0.00025, d_lr=0.00025, epochs=25, alpha=0.9, beta=0, gamma=0.1, delta=0, emb_input=True)
+
+AUC	AP	Top-k Pr/Re
+namespace(g_latent=64, g_hidden=256, d_hidden=64, g_lr=0.00025, d_lr=0.00025, epochs=25, alpha=0.9, beta=0, gamma=0.1, delta=0, emb_input=True)
+
+AUC	AP	Top-k Pr/Re
+namespace(g_latent=64, g_hidden=256, d_hidden=64, g_lr=0.00025, d_lr=0.00025, epochs=25, alpha=0.9, beta=0, gamma=0.1, delta=0, emb_input=True)
+
+AUC	AP	Top-k Pr/Re
+0.943377	0.002724	{"50": [0.0, 0.0], "100": [0.0, 0.0], "150": [0.0, 0.0], "200": [0.0, 0.0]}
+0.535456	0.000722	{"50": [0.0, 0.0], "100": [0.01, 0.03125], "150": [0.006666666666666667, 0.03125], "200": [0.005, 0.03125]}
+0.476663	0.000653	{"50": [0.0, 0.0], "100": [0.01, 0.03125], "150": [0.006666666666666667, 0.03125], "200": [0.005, 0.03125]}

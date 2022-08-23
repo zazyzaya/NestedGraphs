@@ -325,3 +325,61 @@ class HostGraph(Data):
         for i in range(self.num_nodes):
             neigh,ts = self.one_hop.get(i, [[],[]])
             self.one_hop[i] = (torch.tensor(neigh), torch.tensor(ts))
+
+
+class FullGraph(HostGraph):
+    NODE_TYPES = {
+        'PROCESS': 0,
+        'FILE': 1,
+        'REGISTRY': 2
+    }
+
+    def __init__(self, gid, **kwargs):
+        super().__init__(gid, **kwargs)
+        
+        self.node_map = dict()
+        self.cur_id = 0
+        self.ntypes = dict()
+
+    def add_node(self, ts, uuid, feat, ntype):
+        if self.node_map.get(uuid, None) is None: 
+            self.x.append(feat)
+            self.node_times.append(ts)
+            
+            self.node_map[uuid] = self.cur_id
+            self.ntypes[self.cur_id] = ntype
+            self.cur_id += 1
+
+            return True 
+        return False
+        
+    def add_edge(self, ts, src,dst, sfeat, dfeat, stype, dtype, rel):
+        if src[:2] == '-1' or dst[:2] == '-1':
+            return 
+
+        self.add_node(ts, src, sfeat, stype)
+        self.add_node(ts, dst, dfeat, dtype)
+
+        src = self.node_map[src]
+        dst = self.node_map[dst]
+
+        # Update all the index matrices
+        self.src.append(src)
+        self.dst.append(dst)
+        self.edge_attr.append(rel)
+        self.edge_ts.append(ts)
+
+        # Add src node to dst 1-hop neighborhood
+        d_neigh = self.one_hop.get(dst, [[],[],[]])
+        d_neigh[0].append(src)
+        d_neigh[1].append(ts)
+        d_neigh[2].append(rel)
+        self.one_hop[dst] = d_neigh
+
+
+    def update_uuid(self, old, new):
+        '''
+        Only called on FILE-RENAME events
+        '''
+        nid = self.node_map[old]
+        self.node_map[new] = nid

@@ -4,20 +4,33 @@ from dateutil.parser import isoparse
 from joblib import Parallel, delayed
 from tqdm import tqdm
 
-from .hasher import proc_feats, file_feats, reg_feats, mod_feats 
-from .datastructures import HostGraph, NodeList
+from hasher import proc_feats, file_feats, reg_feats, path_to_tensor
+from datastructures import HostGraph, FullGraph, NodeList
 
 # Globals 
 JOBS = 8
 SOURCE = '/mnt/raid0_24TB/datasets/NCR2/nested_optc/hosts/'
 
 # Hyper parameters
-PROC_DEPTH = 8
-FILE_DEPTH = 8
-REG_DEPTH = 8
+PROC_DEPTH = 16
+FILE_DEPTH = 16
+REG_DEPTH = 16
 MOD_DEPTH = 4 # It's very rarely > 3
+DEPTH = 16
 
-EDGE = {'CREATE': 0, 'OPEN': 1}
+EDGES = {
+    'PROCESS': {
+        'CREATE': 0, 'OPEN': 1
+    },
+    'FILE': {
+        'CREATE': 2, 'MODIFY': 3, 
+        'READ': 4, 'WRITE': 5, 
+        'RENAME': None
+    },
+    'REGISTRY': {
+        'ADD': 6, 'EDIT': 7, 'REMOVE': 8
+    }
+}
 
 # Converts from ISO timestamp to UTC time since epoch
 fmt_ts = lambda x : isoparse(x).timestamp()
@@ -51,12 +64,15 @@ def parse_line(graph: HostGraph, nodelist: NodeList, line: str) -> None:
             ts, fmt_p(pid,path), fmt_p(ppid,ppath), 
             proc_feats(path, PROC_DEPTH), 
             proc_feats(ppath, PROC_DEPTH),
-            EDGE[act],
+            EDGES['PROCESS'][act],
             nodelist
         )
 
     elif obj == 'FILE':
         pid, ppid, path, p_img = feats[:4]
+
+        if act == 'RENAME': 
+            print(feats)
 
         if act != 'READ':
             nodelist.add_file(ts, fmt_p(pid,p_img), file_feats(path, act, FILE_DEPTH))
@@ -102,6 +118,77 @@ def build_graphs(hosts, day):
     return Parallel(n_jobs=min(JOBS,len(hosts)), prefer='processes')(
         delayed(build_graph)(h, day) for h in hosts
     )
+
+
+def parse_line_full(graph: FullGraph, line: str) -> None:
+    '''
+    Adds process node to the graph if needed, along with imgpath feature
+
+        Args: 
+            data (HostGraph): data object containing the graph
+            line (str): line from hostlog csv file
+    '''
+    fields = line.split(',', 3)
+    ts, obj, act = fields[:3]
+    feats = fields[3][2:-3].split(',')
+
+    ts = fmt_ts(ts)
+    if ts == 0:
+        return 
+
+    if obj == 'PROCESS':
+        if act == 'TERMINATE':
+            return 
+
+        # When processes are 'OPENED' their 'parent' is the
+        # source proc, and the target is the 'child'
+        pid, ppid, path, ppath = feats
+        graph.add_edge(
+            ts, fmt_p(ppid,ppath), fmt_p(pid,path),
+            path_to_tensor(ppath, DEPTH),
+            path_to_tensor(path, DEPTH), 
+            graph.NODE_TYPES[obj], graph.NODE_TYPES[obj]
+            EDGES[obj][act],
+        )
+
+    elif obj == 'FILE':
+        pid, ppid, path, p_img, new_path = feats
+
+        if act == 'RENAME': 
+            graph.update_uuid(
+                path, new_path
+            )
+            return 
+
+        if act != 'READ':
+            graph.add_edge(
+                ts, fmt_p(pid,p_img), path,
+                path_to_tensor(p_img, DEPTH),
+                path_to_tensor(path, DEPTH),
+                graph.NODE_TYPES['PROCESS'],
+                graph.NODE_TYPES[obj],
+                EDGES[obj][act]
+            )
+        # Otherwise, edge direction is F -> P
+        else: 
+            graph.add_edge(
+                ts, path, fmt_p(pid,p_img),
+                path_to_tensor(path, DEPTH),
+                path_to_tensor(p_img, DEPTH),
+                graph.NODE_TYPES[obj],
+                graph.NODE_TYPES['PROCESS']
+            )
+
+    elif obj == 'REGISTRY': 
+        pid, ppid, key, _, p_img = feats[:5]
+        graph.add_edge(
+            ts, fmt_p(pid,p_img), key, 
+            path_to_tensor(p_img),
+            path_to_tensor(key, REG_DEPTH), 
+            graph.NODE_TYPES['PROCESS'],
+            graph.NODE_TYPES[obj],
+            EDGES[obj][act]
+        )
 
 if __name__ == '__main__':
     build_graph(201,23)

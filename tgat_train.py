@@ -1,4 +1,3 @@
-import glob
 import sys 
 import time
 import pickle
@@ -7,6 +6,7 @@ from types import SimpleNamespace
 import torch
 from torch.optim import Adam
 from torch.nn import BCEWithLogitsLoss
+from tqdm import tqdm
 
 from models.tgat import TGAT
 
@@ -16,12 +16,12 @@ else:
     DAY = 23
 
 torch.set_num_threads(8)
-criterion = torch.nn.BCEWithLogitsLoss()
+criterion = BCEWithLogitsLoss()
 
 HOME = '/mnt/raid0_24TB/isaiah/code/NestedGraphs/'
 HYPERPARAMS = SimpleNamespace(
-    t2v=64, hidden=1024, out=64, 
-    heads=16, layers=3,
+    t2v=64, hidden=512, out=64, 
+    heads=8, layers=3,
     lr=0.001, epochs=100
 )
 
@@ -36,7 +36,7 @@ def step(model, graph, x, chunks=5):
     pos = []
     neg = []
 
-    for i in range(1,chunks-1):
+    for i in tqdm(range(1,chunks-1)):
         src,dst = graph.edge_index[:, chunk_size*i : (chunk_size+1)*i]
         last_t = graph.edge_ts[chunk_size*i]
         
@@ -59,7 +59,6 @@ def step(model, graph, x, chunks=5):
 
 def train(hp, train_graphs):
     graphs = []
-    xs = []
     for t in train_graphs:
         with open(HOME+'inputs/Sept%d/benign/graph%d.pkl' % (DAY, t), 'rb') as f:
             graphs.append(pickle.load(f))

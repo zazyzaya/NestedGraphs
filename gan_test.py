@@ -81,7 +81,7 @@ def score_many(gids, disc, day, cutoff=None):
     labels = []
 
     for gid in gids: 
-        z = torch.load(HOME+'inputs/Sept%d/mal/emb%d.pkl' % (day, gid))
+        z = torch.load(HOME+'inputs/Sept%d/mal/tgat_emb%d.pkl' % (day, gid))
         with open(HOME+'inputs/Sept%d/mal/graph%d.pkl' % (day,gid), 'rb') as f:
             graph = pickle.load(f)
         

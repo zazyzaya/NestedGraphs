@@ -113,7 +113,7 @@ def proc_job(rank, world_size, all_graphs, jobs, hp, val):
         with open(DATA_HOME + 'graph%d.pkl' % all_graphs[gid], 'rb') as f:
             my_graphs.append(pickle.load(f))
         
-        my_nodes.append(torch.load(DATA_HOME + 'emb%d.pkl' % all_graphs[gid]))
+        my_nodes.append(torch.load(DATA_HOME + 'tgat_emb%d.pkl' % all_graphs[gid]))
 
     [compress_ei(g) for g in my_graphs]
 
