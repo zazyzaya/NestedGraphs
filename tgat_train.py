@@ -16,80 +16,100 @@ else:
     DAY = 23
 
 torch.set_num_threads(8)
-criterion = BCEWithLogitsLoss()
+mse = torch.nn.MSELoss()
+bce = torch.nn.BCEWithLogitsLoss()
 
 HOME = '/mnt/raid0_24TB/isaiah/code/NestedGraphs/'
 HYPERPARAMS = SimpleNamespace(
-    t2v=64, hidden=512, out=64, 
-    heads=8, layers=3,
+    t2v=64, hidden=128, out=64, 
+    heads=4, layers=3,
     lr=0.001, epochs=100
 )
 
 def dot(x1,x2):
     return (x1*x2).sum(dim=1)
 
-def step(model, graph, x, chunks=5):
+def step(enc,dec, opts, graph, x, chunks=5):
     '''
-    Let's have it do inductive LP for now, maybe update this later?
+    Encoder/decoder structure
     '''
-    chunk_size = graph.edge_attr.size(0) // chunks 
-    pos = []
-    neg = []
+    enc.train(); dec.train() 
 
-    for i in tqdm(range(1,chunks-1)):
-        src,dst = graph.edge_index[:, chunk_size*i : (chunk_size+1)*i]
+    chunk_size = graph.edge_attr.size(0) // chunks 
+    first_t = graph.edge_ts[0]
+    prog = tqdm(range(1,chunks))
+
+    for i in prog:
+        [o.zero_grad() for o in opts]
+
         last_t = graph.edge_ts[chunk_size*i]
         
-        z = model(
-            graph, x, last_t, 
-            batch=graph.edge_index[:,:(chunk_size+1)*i].max()
+        z = enc(
+            graph, x, first_t, last_t
+        )
+        x_hat = dec(
+            graph, z, first_t, last_t
         )
 
-        pos.append(dot(z[src],z[dst]))
-        neg.append(dot(
-            z[torch.randint(src.max(),(src.size(0),))],
-            z[torch.randint(dst.max(),(dst.size(0),))]
-        ))
+        mask = torch.full((graph.edge_index.size(1),), 1).bool()
+        mask[graph.edge_ts < first_t] = False 
+        mask[graph.edge_ts > last_t] = False 
+        
+        # Only check nodes that recieved messages
+        # I.e., embs should contain enough info about 
+        # a graph's neighbors to reconstruct them
+        nodes = graph.edge_index[1,mask].unique()
+        print("Running loss on %d nodes" % nodes.size(0))
 
-    pos = torch.cat(pos); neg = torch.cat(neg)
-    labels = torch.zeros(pos.size(0)+neg.size(0))
-    labels[pos.size(0):] = 1. 
+        mse_loss = mse(
+            x[nodes],
+            x_hat[nodes]
+        )
+        topo_loss = -torch.log(
+            torch.sigmoid(
+                dot(
+                    z[graph.edge_index[0,mask]],
+                    z[graph.edge_index[1,mask]]
+                )
+            ) 
+        ).mean() 
 
-    return criterion(torch.cat([pos,neg]), labels)
+        loss = mse_loss + topo_loss
+        loss.backward() 
+        prog.desc = '%0.2f' % loss.item() 
+        
+        [o.step() for o in opts]
+        first_t = last_t
+
+    prog.close()
 
 def train(hp, train_graphs):
-    graphs = []
-    for t in train_graphs:
-        with open(HOME+'inputs/Sept%d/benign/graph%d.pkl' % (DAY, t), 'rb') as f:
-            graphs.append(pickle.load(f))
-        
-        '''
-        Cheating to use node embeddings bc they have info about future events
-        xs.append(
-            torch.load(HOME+'inputs/Sept%d/benign/emb%d.pkl' % (DAY, t))
-        )
-        '''
+    with open(HOME+'inputs/Sept%d/benign/full_graph%d.pkl' % (DAY, train_graphs[0]), 'rb') as f:
+        graph = pickle.load(f)
 
-
-    model = TGAT(
-        graphs[0].x.size(1), 
+    enc = TGAT(
+        graph.x.size(1), 10,
         hp.t2v, hp.hidden, hp.out, 
         hp.layers, hp.heads
     )
-    opt = Adam(model.parameters(), lr=hp.lr)
+    dec = TGAT(
+        hp.out, 10,
+        hp.t2v, hp.hidden, graph.x.size(1),
+        hp.layers, hp.heads
+    )
+    
+    e_opt = Adam(enc.parameters(), lr=hp.lr)
+    d_opt = Adam(dec.parameters(), lr=hp.lr)
+    opts = [e_opt, d_opt]
 
     for e in range(hp.epochs):
-        for i in range(len(graphs)):
-            st = time.time() 
+        for i in train_graphs:
+            with open(HOME+'inputs/Sept%d/benign/full_graph%d.pkl' % (DAY, i), 'rb') as f:
+                graph = pickle.load(f)
 
-            opt.zero_grad()
-            loss = step(model, graphs[i], graphs[i].x)
-            loss.backward() 
-            opt.step() 
-
-            print("[%d-%d] Loss: %0.4f  (%0.2fs)" % (e,i,loss.item(), time.time()-st))
-
-            torch.save((model.state_dict(), model.args), 'saved_models/embedder/tgat.pkl')
+            step(enc, dec, opts, graph, graph.x)
+            torch.save((enc.state_dict(), enc.args), 'saved_models/embedder/tgat.pkl')
+            torch.save((dec.state_dict(), dec.args), 'saved_models/embedder/tgat.pkl')
 
 
 

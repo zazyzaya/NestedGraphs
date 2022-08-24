@@ -33,7 +33,6 @@ def propagate_labels(g, day, label_f=HOME+'inputs/manual_labels.txt'):
         children = ei[1][ei[0] == mal]
 
         for c in children:
-            # Troubling that there are loops in here..
             if labels[c] == 0:
                 domain.add(c.item())
                 labels[c] = labels[mal]+1

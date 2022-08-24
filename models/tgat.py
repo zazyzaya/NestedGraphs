@@ -38,7 +38,7 @@ class KQV(nn.Module):
         return self.k(z), self.q(z), self.v(z)
 
 class NeighborhoodAggr(nn.Module):
-    def __init__(self, hidden, heads, TKernel):
+    def __init__(self, hidden, heads, TKernel, rel_dim, dropout):
         super().__init__()
         assert hidden % heads == 0, 'KQV feat dim must be divisible by heads'
 
@@ -47,13 +47,21 @@ class NeighborhoodAggr(nn.Module):
         # the temporal part as if it were part of the initial parameter
         self.t2v = TKernel
         self.time_params = KQV(TKernel.dim, hidden)
+        
+        if rel_dim is not None:
+            self.edge_params = KQV(rel_dim, hidden)
+            self.rels = True 
+        else:
+            self.rels = False
 
         self.hidden = hidden 
         self.heads = heads
         self.head_dim = hidden // heads
         self.norm = math.sqrt(1/self.head_dim)
 
-    def forward(self, nid, k_,q_,v_, t, graph):
+        self.dropout = dropout
+
+    def forward(self, nid, k_,q_,v_, start_t,end_t, graph):
         '''
         Takes as input: 
             nid: the index of the target node 
@@ -64,21 +72,36 @@ class NeighborhoodAggr(nn.Module):
         # 1xd
         q = q_[nid].unsqueeze(0)
 
-        neighbors,times = graph.one_hop[nid]
-        t_mask = times <= t 
+        neighbors,times,rels = graph.one_hop[nid]
+        t_mask = (times >= start_t).logical_and(times < end_t)
+        t_mask = t_mask.squeeze(-1).nonzero().squeeze(-1)
+        
+        # Neighborhood dropout
+        #drop = torch.rand(t_mask.size())
+        #t_mask = t_mask[drop >= self.dropout]
+        if t_mask.size(0) > self.dropout and self.training: 
+            idx = torch.randperm(t_mask.size(0))
+            t_mask = t_mask[idx[:self.dropout]]
 
-        if t_mask.sum() == 0:
+        if t_mask.size(0) == 0:
             return torch.zeros(1,self.hidden)
 
         k,v = k_[neighbors[t_mask]], v_[neighbors[t_mask]]
+
         t_k, t_q, t_v = self.time_params(
             self.t2v(
                 torch.cat(
-                    [torch.tensor([[t]]), times[t_mask].unsqueeze(-1)], 
+                    [torch.tensor([[start_t]]), times[t_mask]], 
                     dim=0
                 )
             )
         )
+
+        # Only necessary for the first layer
+        if self.rels: 
+            r_k, _, r_v = self.edge_params(rels[t_mask])
+            k = k.add(r_k)
+            v = v.add(r_v)
 
         # Factor time into the original matrices
         q = q.add(t_q[0])
@@ -104,11 +127,11 @@ class NeighborhoodAggr(nn.Module):
 
 
 class TGAT_Layer(nn.Module):
-    def __init__(self, in_feats, hidden, out_feats, heads, TKernel):
+    def __init__(self, in_feats, hidden, out_feats, heads, TKernel, rel_dim=None, dropout=64):
         super().__init__()
 
         self.kqv = KQV(in_feats, hidden)
-        self.neighbor_aggr = NeighborhoodAggr(hidden, heads, TKernel)
+        self.neighbor_aggr = NeighborhoodAggr(hidden, heads, TKernel, rel_dim, dropout)
         
         # Paper uses 2-layer FFNN w/ no final activation and intermediate ReLU
         self.lin = nn.Sequential(
@@ -118,7 +141,7 @@ class TGAT_Layer(nn.Module):
         )
 
     
-    def forward(self, graph, x, t, batch=0):
+    def forward(self, graph, x, start_t, end_t, batch=0):
         h = []
 
         if batch <= 0:
@@ -138,27 +161,28 @@ class TGAT_Layer(nn.Module):
 
         # TODO node-level parallelism in this for-loop
         for nid in batch:
-            h.append(self.neighbor_aggr(nid.item(), k,q,v,t,graph))
+            h.append(self.neighbor_aggr(nid.item(), k,q,v, start_t,end_t, graph))
 
         h = torch.cat(h,dim=0)
         x = torch.cat([x,h], dim=1)
         return self.lin(x)
 
+
 class TGAT(nn.Module):
-    def __init__(self, in_feats, t_feats, hidden, out, layers, heads):
+    def __init__(self, in_feats, edge_feats, t_feats, hidden, out, layers, heads):
         super().__init__() 
-        self.args = (in_feats, t_feats, hidden, out, layers, heads)
+        self.args = (in_feats, edge_feats, t_feats, hidden, out, layers, heads)
 
         tkernel = TimeKernel(t_feats)
         self.layers = nn.ModuleList(
-            [TGAT_Layer(in_feats, hidden, hidden, heads, tkernel)] + 
-            ([TGAT_Layer(hidden, hidden, hidden, heads, tkernel)] * (layers-2)) + 
-            [TGAT_Layer(hidden, hidden, out, heads, tkernel)]
+            [TGAT_Layer(in_feats, hidden, hidden, heads, tkernel, rel_dim=edge_feats)] + 
+            ([TGAT_Layer(hidden, hidden, hidden, heads, tkernel, rel_dim=edge_feats)] * (layers-2)) + 
+            [TGAT_Layer(hidden, hidden, out, heads, tkernel, rel_dim=edge_feats)]
         )
 
-    def forward(self, graph, x, t, batch=0):
+    def forward(self, graph, x, start_t, end_t, batch=0):
         # TODO impliment batching 
         for layer in self.layers: 
-            x = layer(graph, x, t)
+            x = layer(graph, x, start_t, end_t)
 
         return x 

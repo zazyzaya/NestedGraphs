@@ -4,8 +4,8 @@ from dateutil.parser import isoparse
 from joblib import Parallel, delayed
 from tqdm import tqdm
 
-from hasher import proc_feats, file_feats, reg_feats, path_to_tensor
-from datastructures import HostGraph, FullGraph, NodeList
+from .hasher import proc_feats, file_feats, reg_feats, path_to_tensor
+from .datastructures import HostGraph, FullGraph, NodeList
 
 # Globals 
 JOBS = 8
@@ -25,10 +25,11 @@ EDGES = {
     'FILE': {
         'CREATE': 2, 'MODIFY': 3, 
         'READ': 4, 'WRITE': 5, 
+        'DELETE': 6,
         'RENAME': None
     },
     'REGISTRY': {
-        'ADD': 6, 'EDIT': 7, 'REMOVE': 8
+        'ADD': 7, 'EDIT': 8, 'REMOVE': 9
     }
 }
 
@@ -147,12 +148,13 @@ def parse_line_full(graph: FullGraph, line: str) -> None:
             ts, fmt_p(ppid,ppath), fmt_p(pid,path),
             path_to_tensor(ppath, DEPTH),
             path_to_tensor(path, DEPTH), 
-            graph.NODE_TYPES[obj], graph.NODE_TYPES[obj]
+            graph.NODE_TYPES[obj], 
+            graph.NODE_TYPES[obj],
             EDGES[obj][act],
         )
 
-    elif obj == 'FILE':
-        pid, ppid, path, p_img, new_path = feats
+    elif obj == 'FILE':  
+        pid, ppid, path, p_img, new_path = feats[:5]
 
         if act == 'RENAME': 
             graph.update_uuid(
@@ -176,19 +178,46 @@ def parse_line_full(graph: FullGraph, line: str) -> None:
                 path_to_tensor(path, DEPTH),
                 path_to_tensor(p_img, DEPTH),
                 graph.NODE_TYPES[obj],
-                graph.NODE_TYPES['PROCESS']
+                graph.NODE_TYPES['PROCESS'],
+                EDGES[obj][act]
             )
 
     elif obj == 'REGISTRY': 
         pid, ppid, key, _, p_img = feats[:5]
         graph.add_edge(
             ts, fmt_p(pid,p_img), key, 
-            path_to_tensor(p_img),
-            path_to_tensor(key, REG_DEPTH), 
+            path_to_tensor(p_img, DEPTH),
+            path_to_tensor(key, DEPTH), 
             graph.NODE_TYPES['PROCESS'],
             graph.NODE_TYPES[obj],
             EDGES[obj][act]
         )
+
+def build_full_graph(host: int, day: int):
+    g = FullGraph(host)
+    prog = tqdm(desc='Lines parsed')
+    
+    with open(SOURCE+'Sept%d/sysclient%04d.csv' % (day,host)) as f:
+        line = f.readline()
+        while(line):
+            parse_line_full(g, line)
+            line = f.readline()
+            prog.update()
+
+
+    prog.close()
+
+    print("Finalizing graph")
+    g.finalize(9) 
+    return g
+
+def build_full_graphs(hosts, day):
+    '''
+    Given a sequence of hosts, build graphs for them in parallel
+    '''
+    return Parallel(n_jobs=min(JOBS,len(hosts)), prefer='processes')(
+        delayed(build_full_graph)(h, day) for h in hosts
+    )
 
 if __name__ == '__main__':
     build_graph(201,23)

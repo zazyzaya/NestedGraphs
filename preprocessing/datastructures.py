@@ -339,7 +339,7 @@ class FullGraph(HostGraph):
         
         self.node_map = dict()
         self.cur_id = 0
-        self.ntypes = dict()
+        self.ntypes = []
 
     def add_node(self, ts, uuid, feat, ntype):
         if self.node_map.get(uuid, None) is None: 
@@ -347,7 +347,7 @@ class FullGraph(HostGraph):
             self.node_times.append(ts)
             
             self.node_map[uuid] = self.cur_id
-            self.ntypes[self.cur_id] = ntype
+            self.ntypes.append(ntype)
             self.cur_id += 1
 
             return True 
@@ -381,5 +381,52 @@ class FullGraph(HostGraph):
         '''
         Only called on FILE-RENAME events
         '''
-        nid = self.node_map[old]
-        self.node_map[new] = nid
+        if old in self.node_map:
+            nid = self.node_map[old]
+            self.node_map[new] = nid
+
+
+    def finalize(self, rels_max):
+        '''
+        Convert all lists being constructed during processing
+        into tensors to be used in later processing
+        '''
+        # Preserve idempotence
+        if self.ready:
+            return 
+
+        self.ready = True 
+
+        # Turn everything into tensors
+        self.edge_index = torch.tensor([self.src, self.dst])
+        
+        # Get one-hot repr of node types
+        nt_sparse = torch.tensor(self.ntypes)
+        nt = torch.zeros(nt_sparse.size(0), max(self.NODE_TYPES.values())+1)
+        nt[torch.arange(nt.size(0)),nt_sparse] = 1
+
+        # And concat to feature matrix
+        self.x = torch.stack(self.x)
+        self.x = torch.cat([nt, self.x],dim=1)
+
+        self.num_nodes = self.x.size(0)
+        self.edge_ts = torch.tensor(self.edge_ts)
+        self.edge_attr = torch.tensor(self.edge_attr)
+        self.node_times = torch.tensor(self.node_times)
+
+        # Make sure edges are sorted by time
+        self.edge_ts, idx = self.edge_ts.sort()
+        self.edge_idx = self.edge_index[:,idx]
+        self.edge_attr = self.edge_attr[idx]
+        self.edge_feat_dim = rels_max+1
+
+        # Make 1-hops into tensors
+        for i in range(self.num_nodes):
+            neigh,ts,rels = self.one_hop.get(i, [[],[],[]])
+            
+            # Convert to one-hot
+            rels = torch.tensor(rels, dtype=torch.long)
+            rel_nonsparse = torch.zeros(rels.size(0), rels_max+1)
+            rel_nonsparse[torch.arange(rels.size(0)), rels] = 1
+
+            self.one_hop[i] = (torch.tensor(neigh), torch.tensor([ts]).T, rel_nonsparse)
