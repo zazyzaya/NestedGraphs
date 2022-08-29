@@ -108,8 +108,8 @@ def train(hp, train_graphs):
                 graph = pickle.load(f)
 
             step(enc, dec, opts, graph, graph.x)
-            torch.save((enc.state_dict(), enc.args), 'saved_models/embedder/tgat.pkl')
-            torch.save((dec.state_dict(), dec.args), 'saved_models/embedder/tgat.pkl')
+            torch.save((enc.state_dict(), enc.args), 'saved_models/embedder/tgat_enc.pkl')
+            torch.save((dec.state_dict(), dec.args), 'saved_models/embedder/tgat_dec.pkl')
 
 
 

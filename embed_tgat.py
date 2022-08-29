@@ -11,8 +11,8 @@ from sim_cse import sample_all
 strip_gid = lambda x : x.split('/')[-1].split('.')[0][5:]
 HOME = '/mnt/raid0_24TB/isaiah/code/NestedGraphs/'
 
-sd,args = torch.load(HOME+'saved_models/embedder/tgat.pkl')
-model = TGAT(args[0],10,*args[1:]) # Temporary mistake, fixed in future saves
+sd,args = torch.load(HOME+'saved_models/embedder/tgat_enc.pkl')
+model = TGAT(*args)
 model.load_state_dict(sd)
 model.eval()
 
@@ -30,8 +30,7 @@ with torch.no_grad():
             graph = pickle.load(f)
 
         zs = model(graph,graph.x,0,graph.edge_ts.max())
-        #torch.save(zs, 'inputs/Sept%d/benign/tgat_emb%s.pkl' % (DAY,gid))
-        exit()
+        torch.save(zs, 'inputs/Sept%d/benign/tgat_emb%s.pkl' % (DAY,gid))
 
     prog.close() 
     
