@@ -1,7 +1,9 @@
+from email.errors import HeaderMissingRequiredValue
 import math 
 
 import torch 
 from torch import nn
+import torch.functional as F
 
 class TimeKernel(nn.Module):
     '''
@@ -29,15 +31,26 @@ class TimeKernel(nn.Module):
 class KQV(nn.Module):
     def __init__(self, in_feats, hidden):
         super().__init__()
-
-        self.k = nn.Linear(in_feats, hidden)
-        self.q = nn.Linear(in_feats, hidden)
-        self.v = nn.Linear(in_feats, hidden)
+        self.kqv = nn.Linear(in_feats, hidden*3)
 
     def forward(self, z):
-        return self.k(z), self.q(z), self.v(z)
+        return self.kqv(z).chunk(3, dim=-1)
 
 class NeighborhoodAggr(nn.Module):
+    '''
+    Self attention aggregation given list of nodes, and
+    the embeddings of their neighbors
+    '''
+    def __init__(self, hidden, heads) -> None:
+        super().__init__()
+        
+        self.hidden = hidden 
+        self.heads = heads
+        self.head_dim = hidden // heads
+        self.norm = math.sqrt(1/self.head_dim)
+        
+
+class NeighborhoodSample(nn.Module):
     def __init__(self, hidden, heads, TKernel, rel_dim, dropout):
         super().__init__()
         assert hidden % heads == 0, 'KQV feat dim must be divisible by heads'
@@ -53,11 +66,6 @@ class NeighborhoodAggr(nn.Module):
             self.rels = True 
         else:
             self.rels = False
-
-        self.hidden = hidden 
-        self.heads = heads
-        self.head_dim = hidden // heads
-        self.norm = math.sqrt(1/self.head_dim)
 
         self.dropout = dropout
 
@@ -108,6 +116,7 @@ class NeighborhoodAggr(nn.Module):
         k = k.add(t_k[1:])
         v = v.add(t_v[1:])
 
+        '''
         # Use reshape optimization for multihead attn 
         # heads x 1 x d/heads
         q = q.view(1, self.heads, self.head_dim).transpose(0,1)
@@ -124,6 +133,10 @@ class NeighborhoodAggr(nn.Module):
         # then, "catted" together as 1 x d 
         attn = torch.softmax((q @ k) * self.norm, dim=1)        
         return (attn @ v).view(1,self.hidden)
+        '''
+
+        # Perform self attention when all q,k,v mats are extracted
+        return q,k,v 
 
 
 class TGAT_Layer(nn.Module):
@@ -131,7 +144,8 @@ class TGAT_Layer(nn.Module):
         super().__init__()
 
         self.kqv = KQV(in_feats, hidden)
-        self.neighbor_aggr = NeighborhoodAggr(hidden, heads, TKernel, rel_dim, dropout)
+        self.neighbor_sample = NeighborhoodSample(hidden, heads, TKernel, rel_dim, dropout)
+        self.neighbor_aggr = NeighborhoodAggr
         
         # Paper uses 2-layer FFNN w/ no final activation and intermediate ReLU
         self.lin = nn.Sequential(
@@ -161,7 +175,12 @@ class TGAT_Layer(nn.Module):
 
         # TODO node-level parallelism in this for-loop
         for nid in batch:
-            h.append(self.neighbor_aggr(nid.item(), k,q,v, start_t,end_t, graph))
+            h.append(self.neighbor_aggr(
+                self.neighbor_sample(
+                    nid.item(), k,q,v, start_t,end_t, graph)
+                )
+            )
+                
 
         h = torch.cat(h,dim=0)
         x = torch.cat([x,h], dim=1)
@@ -186,3 +205,51 @@ class TGAT(nn.Module):
             x = layer(graph, x, start_t, end_t)
 
         return x 
+
+
+def scaled_dot_product(q, k, v, mask=None):
+    d_k = q.size()[-1]
+    attn_logits = torch.matmul(q, k.transpose(-2, -1))
+    attn_logits = attn_logits / math.sqrt(d_k)
+    if mask is not None:
+        attn_logits = attn_logits.masked_fill(mask == 0, -9e15)
+    attention = F.softmax(attn_logits, dim=-1)
+    values = torch.matmul(attention, v)
+    return values, attention
+
+class MultiheadAttention(nn.Module):
+    '''
+    Stolen from 
+    https://uvadlc-notebooks.readthedocs.io/en/latest/tutorial_notebooks/tutorial6/Transformers_and_MHAttention.html
+
+    I just want the multihead attention function. No linear layers, etc. JUST ATTENTION PLEASE
+    '''
+    def __init__(self, dim, heads):
+        super().__init__()
+        assert dim % heads == 0, "Embedding dimension must be 0 modulo number of heads."
+
+        self.embed_dim = dim
+        self.heads = heads
+        self.head_dim = dim // heads
+
+    def forward(self, x, mask=None, return_attention=False):
+        '''
+        Given x as a B x Seq x d*3 tensor, perform self-attention
+        (d*3 because splitting into KQV, but using just single MM)
+        '''
+        batch_size, seq_length, _ = x.size()
+
+        # Separate Q, K, V from linear output
+        qkv = x.reshape(batch_size, seq_length, self.num_heads, 3*self.head_dim)
+        qkv = qkv.permute(0, 2, 1, 3) # [Batch, Head, SeqLen, Dims]
+        q, k, v = qkv.chunk(3, dim=-1)
+
+        # Determine value outputs
+        values, attention = scaled_dot_product(q, k, v, mask=mask)
+        values = values.permute(0, 2, 1, 3) # [Batch, SeqLen, Head, Dims]
+        values = values.reshape(batch_size, seq_length, self.embed_dim)
+
+        if return_attention:
+            return values, attention
+        else:
+            return values
