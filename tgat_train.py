@@ -9,6 +9,7 @@ from torch.nn import BCEWithLogitsLoss
 from tqdm import tqdm
 
 from models.tgat import TGAT
+from models.simple import FFNN
 
 if len(sys.argv) > 1:
     DAY = int(sys.argv[1])
@@ -21,11 +22,11 @@ bce = torch.nn.BCEWithLogitsLoss()
 
 HOME = '/mnt/raid0_24TB/isaiah/code/NestedGraphs/'
 HYPERPARAMS = SimpleNamespace(
-    t2v=64, hidden=128, out=64, 
-    heads=4, layers=3,
-    lr=0.001, epochs=100
+	t2v=64, hidden=2048, out=128, 
+	heads=16, layers=3,
+	t_lr=0.0005, d_lr=0.01, epochs=100,
+    dropout=512
 )
-
 def dot(x1,x2):
     return (x1*x2).sum(dim=1)
 
@@ -37,9 +38,9 @@ def step(enc,dec, opts, graph, x, chunks=5):
 
     chunk_size = graph.edge_attr.size(0) // chunks 
     first_t = graph.edge_ts[0]
-    prog = tqdm(range(1,chunks))
+    prog = tqdm(total=chunks*2)
 
-    for i in prog:
+    for i in range(1,chunks):
         [o.zero_grad() for o in opts]
 
         last_t = graph.edge_ts[chunk_size*i]
@@ -47,38 +48,40 @@ def step(enc,dec, opts, graph, x, chunks=5):
         z = enc(
             graph, x, first_t, last_t
         )
-        x_hat = dec(
-            graph, z, first_t, last_t
-        )
 
         mask = torch.full((graph.edge_index.size(1),), 1).bool()
         mask[graph.edge_ts < first_t] = False 
         mask[graph.edge_ts > last_t] = False 
-        
+
         # Only check nodes that recieved messages
         # I.e., embs should contain enough info about 
         # a graph's neighbors to reconstruct them
         nodes = graph.edge_index[1,mask].unique()
-        print("Running loss on %d nodes" % nodes.size(0))
+
+        x_hat = dec(
+            z[nodes]
+        )
+        prog.update()
 
         mse_loss = mse(
             x[nodes],
-            x_hat[nodes]
+            x_hat
         )
-        topo_loss = -torch.log(
-            torch.sigmoid(
-                dot(
-                    z[graph.edge_index[0,mask]],
-                    z[graph.edge_index[1,mask]]
-                )
-            ) 
-        ).mean() 
 
-        loss = mse_loss + topo_loss
-        loss.backward() 
-        prog.desc = '%0.2f' % loss.item() 
-        
+        topo_loss = torch.sigmoid(
+            dot(
+                z[graph.edge_index[0,mask]],
+                z[graph.edge_index[1,mask]]
+            )
+        ) 
+        topo_loss = -torch.log(topo_loss+1e-9).mean()
+        prog.desc = 'R: %0.4f  T: %0.4f' % (mse_loss.item(), topo_loss.item())
+
+        loss = mse_loss+topo_loss
+        loss.backward()        
         [o.step() for o in opts]
+        prog.update()
+
         first_t = last_t
 
     prog.close()
@@ -90,16 +93,16 @@ def train(hp, train_graphs):
     enc = TGAT(
         graph.x.size(1), 10,
         hp.t2v, hp.hidden, hp.out, 
-        hp.layers, hp.heads
+        hp.layers, hp.heads,
+        dropout=hp.dropout, jit=False
     )
-    dec = TGAT(
-        hp.out, 10,
-        hp.t2v, hp.hidden, graph.x.size(1),
-        hp.layers, hp.heads
+    dec = FFNN(
+        hp.out, hp.hidden, 
+        graph.x.size(1), hp.layers
     )
     
-    e_opt = Adam(enc.parameters(), lr=hp.lr)
-    d_opt = Adam(dec.parameters(), lr=hp.lr)
+    e_opt = Adam(enc.parameters(), lr=hp.t_lr)
+    d_opt = Adam(dec.parameters(), lr=hp.d_lr)
     opts = [e_opt, d_opt]
 
     for e in range(hp.epochs):
@@ -108,7 +111,7 @@ def train(hp, train_graphs):
                 graph = pickle.load(f)
 
             step(enc, dec, opts, graph, graph.x)
-            torch.save((enc.state_dict(), enc.args), 'saved_models/embedder/tgat_enc.pkl')
+            torch.save((enc.state_dict(), enc.args, enc.kwargs), 'saved_models/embedder/tgat_enc.pkl')
             torch.save((dec.state_dict(), dec.args), 'saved_models/embedder/tgat_dec.pkl')
 
 

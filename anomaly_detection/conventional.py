@@ -87,21 +87,38 @@ def test_lof_all(params, day=23):
     # so negating means inliers are close to 1 outliers tend to inf
     preds = -lof.negative_outlier_factor_
 
-    add_stats(stats, preds, y_hat, y)
+    add_stats(stats, preds[tr.size(0):], y_hat[tr.size(0):], y[tr.size(0):])
     
     return pd.DataFrame(stats)
 
 
+def test_ocsvm(params, day=23):
+    svm = OneClassSVM(**params)
+    tr = get_tr(day)
+
+    stats = get_stats() 
+    print("Fitting",tr.size(0),'samples')
+    svm.fit(tr)
+
+    # Need to flip and convert to (0,1)
+    # by default -1 means outlier, 1 is inlier
+    te,y = get_te(day)
+    y_hat = -svm.predict(te)
+    y_hat[y_hat==-1] = 0
+
+    # Smaller numbers correlate to greater chance of outlier
+    # for now, just using inverse
+    preds = 1/(svm.score_samples(te)+1e-9)
+    add_stats(stats, preds, y_hat, y)
+    return pd.DataFrame(stats)
+
+
 if __name__ == '__main__':
-    params = dict(
-        n_neighbors=20,
-        leaf_size=1000
-    )
+    params = dict(cache_size=1000)
+    nus = [0.001, 0.01, 0.1, 0.5, 1.]
+    degree = [1,2,3,5,10]
 
-    neighbors = [20,100,250,500,1000,2500,5000]
-
-    out_f  = open(HOME+'../results/lof.txt', 'w+')
-    out_f.close() 
+    '''
     for n in neighbors:
         params['n_neighbors'] = n
         
@@ -111,14 +128,18 @@ if __name__ == '__main__':
             stats.to_csv(out_f, sep='\t')
             stats.mean().to_csv(out_f, sep='\t')
             stats.sem().to_csv(out_f, sep='\t')
+    '''
+    out_f  = open(HOME+'../results/oc-svm.txt', 'w+')
+    out_f.close() 
 
+    for d in degree:
+        for n in nus:
+            params['nu'] = n
+            params['degree'] = d
 
-    for n in neighbors:
-        params['n_neighbors'] = n
-
-        stats = test_lof_all(params)
-        with open(HOME+'../results/lof.txt', 'a') as out_f:
-            out_f.write('\n\n(Full) Neighbors: %d\n' % n)
-            stats.to_csv(out_f, sep='\t')
-            stats.mean().to_csv(out_f, sep='\t')
-            stats.sem().to_csv(out_f, sep='\t')
+            stats = test_ocsvm(params)
+            with open(HOME+'../results/oc-svm.txt', 'a') as out_f:
+                out_f.write('\n\nNu:%f, Degree:%d\n' % (n,d))
+                stats.to_csv(out_f, sep='\t')
+                stats.mean().to_csv(out_f, sep='\t')
+                stats.sem().to_csv(out_f, sep='\t')
