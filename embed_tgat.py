@@ -11,8 +11,8 @@ from sim_cse import sample_all
 strip_gid = lambda x : x.split('/')[-1].split('.')[0][5:]
 HOME = '/mnt/raid0_24TB/isaiah/code/NestedGraphs/'
 
-sd,args = torch.load(HOME+'saved_models/embedder/tgat_enc.pkl')
-model = TGAT(*args)
+sd,args,kwargs = torch.load(HOME+'saved_models/embedder/tgat_enc.pkl')
+model = TGAT(*args,**kwargs)
 model.load_state_dict(sd)
 model.eval()
 

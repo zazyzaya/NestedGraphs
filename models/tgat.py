@@ -77,11 +77,11 @@ class NeighborhoodAggr(nn.Module):
         t_mask = t_mask.squeeze(-1).nonzero().squeeze(-1)
         
         # Neighborhood dropout
-        #drop = torch.rand(t_mask.size())
-        #t_mask = t_mask[drop >= self.dropout]
         if t_mask.size(0) > self.dropout and self.training: 
-            idx = torch.randperm(t_mask.size(0))
-            t_mask = t_mask[idx[:self.dropout]]
+            drop = torch.rand(t_mask.size())
+            t_mask = t_mask[drop >= self.dropout]
+            #idx = torch.randperm(t_mask.size(0))
+            #t_mask = t_mask[idx[:self.dropout]]
 
         if t_mask.size(0) == 0:
             return torch.zeros(1,self.hidden)
@@ -122,7 +122,7 @@ class NeighborhoodAggr(nn.Module):
         # Perform self-attention calculation
         # output is heads x 1 x d/heads
         # then, "catted" together as 1 x d 
-        attn = torch.softmax((q @ k) * self.norm, dim=1)        
+        attn = torch.softmax((q @ k) * self.norm, dim=-1)        
         return (attn @ v).view(1,self.hidden)
 
 
@@ -143,7 +143,6 @@ class TGAT_Layer(nn.Module):
             nn.Linear(feats, feats)
         )
 
-    USE_MPC = True 
     def forward(self, graph, x, start_t, end_t, batch=0):
         x = self.norm1(x)
         if batch <= 0:
@@ -161,23 +160,9 @@ class TGAT_Layer(nn.Module):
             k,q,v = self.kqv(x[:batch+1])
             batch = torch.arange(batch)
 
-        if self.USE_MPC:
-            futures = [
-                torch.jit.fork(
-                    self.neighbor_aggr.forward, 
-                    nid.item(), 
-                    k,q,v, 
-                    start_t,end_t, 
-                    graph
-                )
-                for nid in batch
-            ]
-            h = [torch.jit.wait(f) for f in futures]
-            
-        else:
-            h = []
-            for nid in batch:
-                h.append(self.neighbor_aggr(nid.item(), k,q,v, start_t,end_t, graph))
+        h = []
+        for nid in batch:
+            h.append(self.neighbor_aggr(nid.item(), k,q,v, start_t,end_t, graph))
 
         h = torch.cat(h,dim=0)
         # Add in the residual 
@@ -225,9 +210,13 @@ class JittableTGATLayer(TGAT_Layer):
     def __init__(self, feats, heads, TKernel, rel_dim, dropout):
         super().__init__(feats, heads, TKernel, rel_dim, dropout)
         
-        self.neighbor_aggr = torch.jit.script(JittableSelfAttention_Rels(feats, heads, TKernel, rel_dim))
+        self.neighbor_aggr = torch.jit.script(
+            JittableSelfAttention_Rels(
+                feats, heads, TKernel, rel_dim
+            )
+        )
         self.dropout = dropout
-        self.feats = torch.tensor(feats)
+        self.feats = feats
 
     def forward(self, graph, x, start_t, end_t):
         x = self.norm1(x)
@@ -238,9 +227,6 @@ class JittableTGATLayer(TGAT_Layer):
         futures = []
         for nid in batch:
             nid_ = nid.item()
-
-            # 1xd
-            #q_ = q[nid].unsqueeze(0)
 
             neighbors,times,rels = graph.one_hop[nid_]
             t_mask = (times >= start_t).logical_and(times < end_t)
@@ -254,9 +240,6 @@ class JittableTGATLayer(TGAT_Layer):
             if t_mask.size(0) == 0:
                 futures.append(torch.jit.fork(ret_zero, self.feats))
                 continue 
-
-            #k_,v_ = k[neighbors[t_mask]], v[neighbors[t_mask]]
-            #times,rels = times[t_mask], rels[t_mask]
             
             futures.append(
                 torch.jit.fork(
@@ -270,6 +253,7 @@ class JittableTGATLayer(TGAT_Layer):
 
         h = [torch.jit.wait(f) for f in futures]
         h = torch.cat(h,dim=0)
+
         # Add in the residual 
         h_2 = h.add(x) 
         h = self.norm2(h_2)
@@ -281,10 +265,11 @@ class JittableTGATLayer(TGAT_Layer):
         return h+h_2
 
 @torch.jit.script 
-def ret_zero(dim):
+def ret_zero(dim: int):
     return torch.zeros(1,dim)
 
-class JittableSelfAttention_Rels(nn.Module):
+from torch.jit import ScriptModule, trace 
+class JittableSelfAttention_Rels(ScriptModule):
     '''
     Essentially the same as NeighborAggr, but must have a 
     deterministic forward function to be compiled for multithreading
@@ -296,32 +281,36 @@ class JittableSelfAttention_Rels(nn.Module):
         self.head_dim = hidden // heads
         self.norm = math.sqrt(1/self.head_dim)
 
-        self.t2v = TKernel
-        self.time_params = KQV(TKernel.dim, hidden)
-        self.edge_params = KQV(r_dim, hidden)
+        #self.t2v = TKernel
+        #self.time_params = KQV(TKernel.dim, hidden)
+        self.edge_params = KQV(r_dim, hidden) # Neither works
+        #self.edge_params = trace(KQV(r_dim, hidden), torch.rand((1,r_dim)))
         
         self.hidden = hidden 
         self.heads = heads
         self.head_dim = hidden // heads
         self.norm = math.sqrt(1/self.head_dim)
 
+    @torch.jit.script_method
     def forward(self, k_,q_,v_, neighbors,nid,mask, start_t,times,rels):
         neigh = neighbors[mask]
         k = k_[neigh]
         q = q_[nid].unsqueeze(0)
         v = v_[neigh]
 
-        times = times[mask]
-        rels = rels[mask]
-
+        '''
         # Factor time into the original matrices
+        times = times[mask]
         t_k, t_q, t_v = self.time_params(
             self.t2v(torch.cat([start_t,times]))
         )
         q = q.add(t_q[0])
         k = k.add(t_k[1:])
         v = v.add(t_v[1:])
- 
+        '''
+
+        # Add relational info 
+        rels = rels[mask]
         r_k, _, r_v = self.edge_params(rels)
         k = k.add(r_k)
         v = v.add(r_v)
@@ -340,5 +329,5 @@ class JittableSelfAttention_Rels(nn.Module):
         # Perform self-attention calculation
         # output is heads x 1 x d/heads
         # then, "catted" together as 1 x d 
-        attn = torch.softmax((q @ k) * self.norm, dim=1)        
+        attn = torch.softmax((q @ k) * self.norm, dim=-1)        
         return (attn @ v).view(1,self.hidden)

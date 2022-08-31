@@ -22,15 +22,15 @@ bce = torch.nn.BCEWithLogitsLoss()
 
 HOME = '/mnt/raid0_24TB/isaiah/code/NestedGraphs/'
 HYPERPARAMS = SimpleNamespace(
-	t2v=64, hidden=2048, out=128, 
-	heads=16, layers=3,
+	t2v=64, hidden=256, out=128, 
+	heads=8, layers=3,
 	t_lr=0.0005, d_lr=0.01, epochs=100,
-    dropout=512
+    dropout=0.5
 )
 def dot(x1,x2):
     return (x1*x2).sum(dim=1)
 
-def step(enc,dec, opts, graph, x, chunks=5):
+def step(e,enc,dec, opts, graph, x, chunks=5):
     '''
     Encoder/decoder structure
     '''
@@ -38,7 +38,7 @@ def step(enc,dec, opts, graph, x, chunks=5):
 
     chunk_size = graph.edge_attr.size(0) // chunks 
     first_t = graph.edge_ts[0]
-    prog = tqdm(total=chunks*2)
+    prog = tqdm(total=chunks*2, desc='[%d]'%e)
 
     for i in range(1,chunks):
         [o.zero_grad() for o in opts]
@@ -61,21 +61,27 @@ def step(enc,dec, opts, graph, x, chunks=5):
         x_hat = dec(
             z[nodes]
         )
-        prog.update()
-
         mse_loss = mse(
             x[nodes],
             x_hat
         )
 
-        topo_loss = torch.sigmoid(
+        topo_loss_p = torch.sigmoid(
             dot(
                 z[graph.edge_index[0,mask]],
                 z[graph.edge_index[1,mask]]
             )
         ) 
-        topo_loss = -torch.log(topo_loss+1e-9).mean()
-        prog.desc = 'R: %0.4f  T: %0.4f' % (mse_loss.item(), topo_loss.item())
+        topo_loss_n = torch.sigmoid(
+            dot(
+                z[graph.edge_index[0,mask[torch.randperm(mask.size(0))]]],
+                z[graph.edge_index[1,mask[torch.randperm(mask.size(0))]]]
+            )
+        )
+
+        topo_loss = (-torch.log(1-topo_loss_n+1e-9)-torch.log(topo_loss_p+1e-9)).mean()
+        prog.desc = '[%d] R: %0.4f  T: %0.4f' % (e, mse_loss.item(), topo_loss.item())
+        prog.update()
 
         loss = mse_loss+topo_loss
         loss.backward()        
@@ -110,7 +116,7 @@ def train(hp, train_graphs):
             with open(HOME+'inputs/Sept%d/benign/full_graph%d.pkl' % (DAY, i), 'rb') as f:
                 graph = pickle.load(f)
 
-            step(enc, dec, opts, graph, graph.x)
+            step(e, enc, dec, opts, graph, graph.x)
             torch.save((enc.state_dict(), enc.args, enc.kwargs), 'saved_models/embedder/tgat_enc.pkl')
             torch.save((dec.state_dict(), dec.args), 'saved_models/embedder/tgat_dec.pkl')
 

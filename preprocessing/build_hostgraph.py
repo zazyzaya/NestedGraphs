@@ -20,7 +20,7 @@ DEPTH = 16
 
 EDGES = {
     'PROCESS': {
-        'CREATE': 0, 'OPEN': 1
+        'CREATE': 0, 'OPEN': 1 # Open is unused.. produces too much clutter
     },
     'FILE': {
         'CREATE': 2, 'MODIFY': 3, 
@@ -138,7 +138,7 @@ def parse_line_full(graph: FullGraph, line: str) -> None:
         return 
 
     if obj == 'PROCESS':
-        if act == 'TERMINATE':
+        if act != 'CREATE':
             return 
 
         # When processes are 'OPENED' their 'parent' is the
@@ -171,7 +171,7 @@ def parse_line_full(graph: FullGraph, line: str) -> None:
                 graph.NODE_TYPES[obj],
                 EDGES[obj][act]
             )
-        # Otherwise, edge direction is F -> P
+        # Otherwise, edge direction is F <- P
         else: 
             graph.add_edge(
                 ts, path, fmt_p(pid,p_img),

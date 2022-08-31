@@ -24,6 +24,21 @@ def fwdtime(model,graph):
     model(graph,graph.x,graph.edge_ts.min(),graph.edge_ts.max())
     return time.time()-st
 
+def bwdtime(model,graph,n_edges=1000):
+    print("Fwd...",end='',flush=True)
+    st = time.time()
+    zs = model(graph,graph.x,graph.edge_ts.min(),torch.tensor([1569244416.0])) # 1000th edge
+    print(' (%fs)' % (time.time()-st))
+
+    print("Loss...")
+    lp = (zs[graph.edge_index[0,:n_edges]]*zs[graph.edge_index[1,:n_edges]]).sum(dim=1)
+    lp = -torch.log(torch.sigmoid(lp)+1e-9)
+    loss = lp.mean()
+
+    print("Bwd...")
+    st = time.time()
+    loss.backward()
+    return time.time()-st 
 
 torch.set_num_threads(8)
 # DROPOUT=64
@@ -39,7 +54,7 @@ torch.set_num_threads(8)
 # 2048 dim hidden layers: 
 #        8-thr JIT enabled:  39.88254380226135
 tgat = TGAT(graph.x.size(1), 10, hp.t2v, hp.hidden, hp.out, hp.layers, hp.heads, dropout=hp.dropout)
-print("JIT enabled: ",fwdtime(tgat,graph))
+print("JIT enabled: ",bwdtime(tgat,graph))
 
 # DROPOUT=64 (only process 64 at a time while training)
 #  128 dim hidden layers:
@@ -54,4 +69,4 @@ print("JIT enabled: ",fwdtime(tgat,graph))
 # 2048 dim hidden layers: 
 #        8-thr JIT disabled: 43.10606861114502
 tgat = TGAT(graph.x.size(1), 10, hp.t2v, hp.hidden, hp.out, hp.layers, hp.heads, jit=False, dropout=hp.dropout)
-print("JIT disabled: ",fwdtime(tgat,graph))
+print("JIT disabled: ",bwdtime(tgat,graph))
