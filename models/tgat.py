@@ -32,9 +32,15 @@ class KQV(nn.Module):
     def __init__(self, in_feats, hidden):
         super().__init__()
         self.kqv = nn.Linear(in_feats, hidden*3, bias=False)
+        self.h_size = hidden 
 
     def forward(self, z):
-        return self.kqv(z).chunk(3,dim=1)
+        z = self.kqv(z)
+
+        # torch.chunk not supported by JIT
+        return  z[:, :self.h_size], \
+                z[:, self.h_size:self.h_size*2], \
+                z[:, self.h_size*2:] 
 
 class NeighborhoodAggr(nn.Module):
     def __init__(self, hidden, heads, TKernel, rel_dim, dropout):
@@ -78,10 +84,10 @@ class NeighborhoodAggr(nn.Module):
         
         # Neighborhood dropout
         if t_mask.size(0) > self.dropout and self.training: 
-            drop = torch.rand(t_mask.size())
-            t_mask = t_mask[drop >= self.dropout]
-            #idx = torch.randperm(t_mask.size(0))
-            #t_mask = t_mask[idx[:self.dropout]]
+            #drop = torch.rand(t_mask.size())
+            #t_mask = t_mask[drop >= self.dropout]
+            idx = torch.randperm(t_mask.size(0))
+            t_mask = t_mask[idx[:self.dropout]]
 
         if t_mask.size(0) == 0:
             return torch.zeros(1,self.hidden)
@@ -182,18 +188,18 @@ class TGAT(nn.Module):
         self.args = (in_feats, edge_feats, t_feats, hidden, out, layers, heads)
         self.kwargs = dict(dropout=dropout, jit=jit)
 
-        tkernel = TimeKernel(t_feats)
+        self.tkernel = TimeKernel(t_feats)
         self.proj = nn.Sequential(
             nn.Linear(in_feats, hidden), 
             nn.ReLU()
         )
         if jit:
             self.layers = nn.ModuleList(
-                [JittableTGATLayer(hidden, heads, tkernel, edge_feats, dropout)] * (layers)
+                [JittableTGATLayer(hidden, heads, self.tkernel, edge_feats, dropout)] * (layers)
             )
         else: 
             self.layers = nn.ModuleList(
-                [TGAT_Layer(hidden, heads, tkernel, dropout=dropout, rel_dim=edge_feats)] * (layers)
+                [TGAT_Layer(hidden, heads, self.tkernel, dropout=dropout, rel_dim=edge_feats)] * (layers)
             )
         self.out_proj = nn.Linear(hidden, out)
 

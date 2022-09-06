@@ -25,7 +25,7 @@ HYPERPARAMS = SimpleNamespace(
 	t2v=64, hidden=256, out=128, 
 	heads=8, layers=3,
 	t_lr=0.0005, d_lr=0.01, epochs=100,
-    dropout=0.5
+    dropout=20 #Same as original paper
 )
 def dot(x1,x2):
     return (x1*x2).sum(dim=1)
