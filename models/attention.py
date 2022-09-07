@@ -46,14 +46,14 @@ class MultiHeadAttention(nn.Module):
         self.w_qs = nn.Linear(in_dim, n_head * hidden_dim, bias=False)
         self.w_ks = nn.Linear(in_dim, n_head * hidden_dim, bias=False)
         self.w_vs = nn.Linear(in_dim, n_head * hidden_dim, bias=False)
-        nn.init.normal_(self.w_qs.weight, mean=0, std=np.sqrt(2.0 / (in_dim + d_k)))
-        nn.init.normal_(self.w_ks.weight, mean=0, std=np.sqrt(2.0 / (in_dim + d_k)))
-        nn.init.normal_(self.w_vs.weight, mean=0, std=np.sqrt(2.0 / (in_dim + d_v)))
+        nn.init.normal_(self.w_qs.weight, mean=0, std=np.sqrt(2.0 / (in_dim + hidden_dim)))
+        nn.init.normal_(self.w_ks.weight, mean=0, std=np.sqrt(2.0 / (in_dim + hidden_dim)))
+        nn.init.normal_(self.w_vs.weight, mean=0, std=np.sqrt(2.0 / (in_dim + hidden_dim)))
 
-        self.attention = ScaledDotProductAttention(temperature=np.power(d_k, 0.5), attn_dropout=dropout)
+        self.attention = ScaledDotProductAttention(temperature=np.power(hidden_dim, 0.5), attn_dropout=dropout)
         self.layer_norm = nn.LayerNorm(in_dim)
 
-        self.fc = nn.Linear(n_head * d_v, in_dim)
+        self.fc = nn.Linear(n_head * hidden_dim, in_dim)
         
         nn.init.xavier_normal_(self.fc.weight)
 
@@ -68,6 +68,7 @@ class MultiHeadAttention(nn.Module):
         sz_b, len_k, _ = k.size()
         sz_b, len_v, _ = v.size()
 
+        # B x 1 x dk
         residual = q
 
         q = self.w_qs(q).view(sz_b, len_q, n_head, d_k)
