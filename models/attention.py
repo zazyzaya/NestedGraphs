@@ -1,3 +1,4 @@
+import numpy as np 
 import torch 
 from torch import nn
 
@@ -35,24 +36,24 @@ class ScaledDotProductAttention(torch.nn.Module):
 class MultiHeadAttention(nn.Module):
     ''' Multi-Head Attention module '''
 
-    def __init__(self, n_head, d_model, d_k, d_v, dropout=0.1):
+    def __init__(self, n_head, in_dim, hidden_dim, dropout=0.1):
         super().__init__()
 
         self.n_head = n_head
-        self.d_k = d_k
-        self.d_v = d_v
+        self.d_k = hidden_dim
+        self.d_v = hidden_dim
 
-        self.w_qs = nn.Linear(d_model, n_head * d_k, bias=False)
-        self.w_ks = nn.Linear(d_model, n_head * d_k, bias=False)
-        self.w_vs = nn.Linear(d_model, n_head * d_v, bias=False)
-        nn.init.normal_(self.w_qs.weight, mean=0, std=np.sqrt(2.0 / (d_model + d_k)))
-        nn.init.normal_(self.w_ks.weight, mean=0, std=np.sqrt(2.0 / (d_model + d_k)))
-        nn.init.normal_(self.w_vs.weight, mean=0, std=np.sqrt(2.0 / (d_model + d_v)))
+        self.w_qs = nn.Linear(in_dim, n_head * hidden_dim, bias=False)
+        self.w_ks = nn.Linear(in_dim, n_head * hidden_dim, bias=False)
+        self.w_vs = nn.Linear(in_dim, n_head * hidden_dim, bias=False)
+        nn.init.normal_(self.w_qs.weight, mean=0, std=np.sqrt(2.0 / (in_dim + d_k)))
+        nn.init.normal_(self.w_ks.weight, mean=0, std=np.sqrt(2.0 / (in_dim + d_k)))
+        nn.init.normal_(self.w_vs.weight, mean=0, std=np.sqrt(2.0 / (in_dim + d_v)))
 
         self.attention = ScaledDotProductAttention(temperature=np.power(d_k, 0.5), attn_dropout=dropout)
-        self.layer_norm = nn.LayerNorm(d_model)
+        self.layer_norm = nn.LayerNorm(in_dim)
 
-        self.fc = nn.Linear(n_head * d_v, d_model)
+        self.fc = nn.Linear(n_head * d_v, in_dim)
         
         nn.init.xavier_normal_(self.fc.weight)
 
@@ -88,6 +89,5 @@ class MultiHeadAttention(nn.Module):
 
         output = self.dropout(self.fc(output))
         output = self.layer_norm(output + residual)
-        #output = self.layer_norm(output)
         
         return output, attn

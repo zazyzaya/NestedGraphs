@@ -19,7 +19,7 @@ class TimeKernel(nn.Module):
         self.dim = dim
 
     def forward(self, t):
-        t = t.max()-t
+        #t = t.max()-t
         t = self.w(t)
 
         # Get sin/cos to be interleaved
