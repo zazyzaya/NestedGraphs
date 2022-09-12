@@ -88,11 +88,11 @@ def get_uuids(fid, file_path, total):
 
                 if 'image_path' in row['properties']:
                     image_path = row['properties']['image_path']
-                    objects[row['objectID']] = (pid,image_path.split('\\')[-1])
+                    objects[row['objectID']] = (pid,image_path)
 
                 if 'parent_image_path' in row['properties']:
                     parent_image_path = row['properties']['parent_image_path']
-                    objects[row['actorID']] = (ppid, parent_image_path.split('\\')[-1]) 
+                    objects[row['actorID']] = (ppid, parent_image_path) 
 
     return objects 
 
