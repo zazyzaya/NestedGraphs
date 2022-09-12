@@ -363,13 +363,7 @@ class FullGraph(HostGraph):
         src = self.node_map[src]
         dst = self.node_map[dst]
 
-        # Update all the index matrices
-        self.src.append(src)
-        self.dst.append(dst)
-        self.edge_attr.append(rel)
-        self.edge_ts.append(ts)
-
-        # Add src node to dst 1-hop neighborhood
+        # Add src node to dst 1-hop neighborhood (no longer bother with ei lists from before--superflous)
         d_neigh = self.one_hop.get(dst, [[],[],[]])
         d_neigh[0].append(src)
         d_neigh[1].append(ts)
@@ -410,23 +404,42 @@ class FullGraph(HostGraph):
         self.x = torch.cat([nt, self.x],dim=1)
 
         self.num_nodes = self.x.size(0)
-        self.edge_ts = torch.tensor(self.edge_ts)
-        self.edge_attr = torch.tensor(self.edge_attr)
         self.node_times = torch.tensor(self.node_times)
 
-        # Make sure edges are sorted by time
-        self.edge_ts, idx = self.edge_ts.sort()
-        self.edge_idx = self.edge_index[:,idx]
-        self.edge_attr = self.edge_attr[idx]
-        self.edge_feat_dim = rels_max+1
-
         # Make 1-hops into tensors
+        # Save in csr format for easier indexing
+        self.csr_ptr = [0]
+        ei = []; rels = []; ts = []
         for i in range(self.num_nodes):
-            neigh,ts,rels = self.one_hop.get(i, [[],[],[]])
-            
-            # Convert to one-hot
-            rels = torch.tensor(rels, dtype=torch.long)
-            rel_nonsparse = torch.zeros(rels.size(0), rels_max+1)
-            rel_nonsparse[torch.arange(rels.size(0)), rels] = 1
+            neigh,t,rel = self.one_hop.get(i, [[],[],[]])
 
-            self.one_hop[i] = (torch.tensor(neigh), torch.tensor([ts]).T, rel_nonsparse)
+            # Convert to one-hot
+            rel = torch.tensor(rel, dtype=torch.long)
+            rel_nonsparse = torch.zeros(rel.size(0), rels_max+1)
+            rel_nonsparse[torch.arange(rel.size(0)), rel] = 1
+
+            # Add to list of tensors
+            t = torch.tensor(t); neigh = torch.tensor(neigh)
+            ei.append(neigh); ts.append(t); rels.append(rel)
+
+            # Update csr matrix pointer
+            self.csr_ptr.append(self.csr_ptr[-1] + t.size(0))
+
+        self.edge_index = torch.cat(ei, dim=1)
+        self.edge_attr = torch.cat(rels, dim=0)
+        self.edge_ts = torch.cat(ts, dim=0)
+
+
+    def get_one_hop(self, idx):
+        assert self.ready, "Cannot call get_one_hop until graph is finalized"
+
+        st = self.csr_ptr[idx]
+        end = self.csr_ptr[idx+1]
+
+        return self.edge_index[:,st:end], self.edge_attr[st:end], self.edge_ts[st:end]
+
+    def to(self, device):
+        self.x = self.x.to(device)
+        self.edge_index = self.edge_index.to(device)
+        self.edge_attr = self.edge_attr.to(device)
+        self.edge_ts = self.edge_ts.to(device)
