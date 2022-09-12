@@ -1,9 +1,8 @@
-import math
-from turtle import forward 
+import math 
 
-from joblib import Parallel, delayed
+import numpy as np 
 import torch 
-from torch import nn
+from torch import nn 
 
 class TimeKernel(nn.Module):
     '''
@@ -28,312 +27,233 @@ class TimeKernel(nn.Module):
             torch.cos(t)
         ], dim=2).view(t.size(0),self.dim) * self.norm
 
-class KQV(nn.Module):
-    def __init__(self, in_feats, hidden):
+'''
+Stolen from the TGAT repo: 
+    https://github.com/StatsDLMathsRecomSys/Inductive-representation-learning-on-temporal-graphs
+
+Good base attention mechanism. Esp for batched input 
+'''
+class ScaledDotProductAttention(torch.nn.Module):
+    ''' Scaled Dot-Product Attention '''
+
+    def __init__(self, temperature, attn_dropout=0.1):
         super().__init__()
-        self.kqv = nn.Linear(in_feats, hidden*3, bias=False)
-        self.h_size = hidden 
+        self.temperature = temperature
+        self.dropout = torch.nn.Dropout(attn_dropout)
+        self.softmax = torch.nn.Softmax(dim=2)
 
-    def forward(self, z):
-        z = self.kqv(z)
+    def forward(self, q, k, v, mask=None):
 
-        # torch.chunk not supported by JIT
-        return  z[:, :self.h_size], \
-                z[:, self.h_size:self.h_size*2], \
-                z[:, self.h_size*2:] 
+        attn = torch.bmm(q, k.transpose(1, 2))
+        attn = attn / self.temperature
 
-class NeighborhoodAggr(nn.Module):
-    def __init__(self, hidden, heads, TKernel, rel_dim, dropout):
-        super().__init__()
-        assert hidden % heads == 0, 'KQV feat dim must be divisible by heads'
+        if mask is not None:
+            attn = attn.masked_fill(mask, -1e10)
 
-        # Note that W( x||t2v(t) ) = W_1(x) + W_2(t2v)
-        # so we can calculate K,Q,V on their own, then add in 
-        # the temporal part as if it were part of the initial parameter
-        self.t2v = TKernel
-        self.time_params = KQV(TKernel.dim, hidden)
+        attn = self.softmax(attn) # [n * b, l_q, l_k]
+        attn = self.dropout(attn) # [n * b, l_v, d]
+                
+        output = torch.bmm(attn, v)
         
-        if rel_dim is not None:
-            self.edge_params = KQV(rel_dim, hidden)
-            self.rels = True 
-        else:
-            self.rels = False
+        return output, attn
 
-        self.hidden = hidden 
-        self.heads = heads
-        self.head_dim = hidden // heads
-        self.norm = math.sqrt(1/self.head_dim)
+class MultiHeadAttention(nn.Module):
+    ''' Multi-Head Attention module '''
 
-        self.dropout = dropout
-
-
-    def forward(self, nid, k_,q_,v_, start_t,end_t, graph):
-        '''
-        Takes as input: 
-            nid: the index of the target node 
-            k,q,v: the key, query, value matrices for all nodes
-            t: the current time 
-            graph: a graph datastructure specified by preprocessing.datastructures.HostGraph
-        '''
-        # 1xd
-        q = q_[nid].unsqueeze(0)
-
-        neighbors,times,rels = graph.one_hop[nid]
-        t_mask = (times >= start_t).logical_and(times < end_t)
-        t_mask = t_mask.squeeze(-1).nonzero().squeeze(-1)
-        
-        # Neighborhood dropout
-        if t_mask.size(0) > self.dropout and self.training: 
-            #drop = torch.rand(t_mask.size())
-            #t_mask = t_mask[drop >= self.dropout]
-            idx = torch.randperm(t_mask.size(0))
-            t_mask = t_mask[idx[:self.dropout]]
-
-        if t_mask.size(0) == 0:
-            return torch.zeros(1,self.hidden)
-
-        k,v = k_[neighbors[t_mask]], v_[neighbors[t_mask]]
-
-        t_k, t_q, t_v = self.time_params(
-            self.t2v(
-                torch.cat(
-                    [torch.tensor([[start_t]]), times[t_mask]], 
-                    dim=0
-                )
-            )
-        )
-
-        # Only necessary for the first layer
-        if self.rels: 
-            r_k, _, r_v = self.edge_params(rels[t_mask])
-            k = k.add(r_k)
-            v = v.add(r_v)
-
-        # Factor time into the original matrices
-        q = q.add(t_q[0])
-        k = k.add(t_k[1:])
-        v = v.add(t_v[1:])
-
-        # Use reshape optimization for multihead attn 
-        # heads x 1 x d/heads
-        q = q.view(1, self.heads, self.head_dim).transpose(0,1)
-        
-        # heads x d/heads x batch
-        k = k.view(k.size(0), self.heads, self.head_dim)
-        k = k.transpose(-1,1).transpose(-1,0)
-
-        # heads x batch x d/heads
-        v = v.view(v.size(0),self.heads,self.head_dim).transpose(0,1)
-
-        # Perform self-attention calculation
-        # output is heads x 1 x d/heads
-        # then, "catted" together as 1 x d 
-        attn = torch.softmax((q @ k) * self.norm, dim=-1)        
-        return (attn @ v).view(1,self.hidden)
-
-
-class TGAT_Layer(nn.Module):
-    def __init__(self, feats, heads, TKernel, rel_dim=None, dropout=64):
+    def __init__(self, n_head, in_dim, hidden_dim, dropout=0.1):
         super().__init__()
 
-        self.kqv = KQV(feats, feats)
-        self.neighbor_aggr = NeighborhoodAggr(feats, heads, TKernel, rel_dim, dropout)
+        self.n_head = n_head
+        self.d_k = hidden_dim
+        self.d_v = hidden_dim
+
+        self.w_qs = nn.Linear(in_dim, n_head * hidden_dim, bias=False)
+        self.w_ks = nn.Linear(in_dim, n_head * hidden_dim, bias=False)
+        self.w_vs = nn.Linear(in_dim, n_head * hidden_dim, bias=False)
+        nn.init.normal_(self.w_qs.weight, mean=0, std=np.sqrt(2.0 / (in_dim + hidden_dim)))
+        nn.init.normal_(self.w_ks.weight, mean=0, std=np.sqrt(2.0 / (in_dim + hidden_dim)))
+        nn.init.normal_(self.w_vs.weight, mean=0, std=np.sqrt(2.0 / (in_dim + hidden_dim)))
+
+        self.attention = ScaledDotProductAttention(temperature=np.power(hidden_dim, 0.5), attn_dropout=dropout)
+        self.layer_norm = nn.LayerNorm(in_dim)
+
+        self.fc = nn.Linear(n_head * hidden_dim, in_dim)
         
-        self.norm1 = nn.LayerNorm(feats)
-        self.norm2 = nn.LayerNorm(feats)
+        nn.init.xavier_normal_(self.fc.weight)
 
-        # Paper uses 2-layer FFNN w/ no final activation and intermediate ReLU
-        self.lin = nn.Sequential(
-            nn.Linear(feats*2, feats),
-            nn.ReLU(),
-            nn.Linear(feats, feats)
-        )
+        self.dropout = nn.Dropout(dropout)
 
-    def forward(self, graph, x, start_t, end_t, batch=0):
-        x = self.norm1(x)
-        if batch <= 0:
-            k,q,v = self.kqv(x)
-            batch = torch.arange(graph.num_nodes)
+
+    def forward(self, q, k, v, mask=None):
+
+        d_k, d_v, n_head = self.d_k, self.d_v, self.n_head
+
+        sz_b, len_q, _ = q.size()
+        sz_b, len_k, _ = k.size()
+        sz_b, len_v, _ = v.size()
+
+        # B x 1 x dk
+        residual = q
+
+        q = self.w_qs(q).view(sz_b, len_q, n_head, d_k)
+        k = self.w_ks(k).view(sz_b, len_k, n_head, d_k)
+        v = self.w_vs(v).view(sz_b, len_v, n_head, d_v)
+
+        q = q.permute(2, 0, 1, 3).contiguous().view(-1, len_q, d_k) # (n*b) x lq x dk
+        k = k.permute(2, 0, 1, 3).contiguous().view(-1, len_k, d_k) # (n*b) x lk x dk
+        v = v.permute(2, 0, 1, 3).contiguous().view(-1, len_v, d_v) # (n*b) x lv x dv
+
+        if mask is not None:
+            mask = mask.repeat(n_head, 1, 1) # (n*b) x .. x ..
+            
+        output, attn = self.attention(q, k, v, mask=mask)
+
+        output = output.view(n_head, sz_b, len_q, d_v)
         
-        # Nodes are numbered in order as they come in, so 
-        # if we are only looking at time t, then there is some 
-        # max nid s.t. all nodes > nids happen in the future and
-        # don't need to be calculated\
+        output = output.permute(1, 2, 0, 3).contiguous().view(sz_b, len_q, -1) # b x lq x (n*dv)
+
+        output = self.dropout(self.fc(output))
+        output = self.layer_norm(output + residual)
         
-        # (Actually, as it stands, the nids are not guaranteed to be
-        # in order, so can't do this yet TODO)
-        else: 
-            k,q,v = self.kqv(x[:batch+1])
-            batch = torch.arange(batch)
-
-        h = []
-        for nid in batch:
-            h.append(self.neighbor_aggr(nid.item(), k,q,v, start_t,end_t, graph))
-
-        h = torch.cat(h,dim=0)
-        # Add in the residual 
-        h_2 = h.add(x) 
-        h = self.norm2(h_2)
-
-        h = torch.cat([x,h], dim=1)
-        h = self.lin(h)
-
-        # Again, add residual from before norm
-        return h+h_2
-
+        return output, attn
 
 class TGAT(nn.Module):
-    def __init__(self, in_feats, edge_feats, t_feats, hidden, out, layers, heads, dropout=64, jit=True):
-        super().__init__() 
+    '''
+    Adapted from the TGAT repo for our data structure
+    '''
+    def __init__(self, in_feats, edge_feats, t_feats, hidden, out, layers, heads, neighborhood_size=64, dropout=0.1, device=torch.device('cpu')):
+        super().__init__()
+        
         self.args = (in_feats, edge_feats, t_feats, hidden, out, layers, heads)
-        self.kwargs = dict(dropout=dropout, jit=jit)
+        self.kwargs = dict(neighborhood_size=neighborhood_size, dropout=dropout, device=device)
 
-        self.tkernel = TimeKernel(t_feats)
-        self.proj = nn.Sequential(
-            nn.Linear(in_feats, hidden), 
+        self.proj_in = nn.Sequential(
+            nn.Linear(in_feats, hidden, device=device), 
             nn.ReLU()
         )
-        if jit:
-            self.layers = nn.ModuleList(
-                [JittableTGATLayer(hidden, heads, self.tkernel, edge_feats, dropout)] * (layers)
-            )
-        else: 
-            self.layers = nn.ModuleList(
-                [TGAT_Layer(hidden, heads, self.tkernel, dropout=dropout, rel_dim=edge_feats)] * (layers)
-            )
-        self.out_proj = nn.Linear(hidden, out)
 
-    def forward(self, graph, x, start_t, end_t, batch=0):
-        # TODO impliment batching 
-        x = self.proj(x)
-        for layer in self.layers: 
-            x = layer(graph, x, start_t, end_t)
+        self.tkernel = TimeKernel(t_feats, device=device)
 
-        return self.out_proj(x)
+        d_size = hidden+edge_feats+t_feats
 
-
-class JittableTGATLayer(TGAT_Layer):
-    def __init__(self, feats, heads, TKernel, rel_dim, dropout):
-        super().__init__(feats, heads, TKernel, rel_dim, dropout)
-        
-        self.neighbor_aggr = torch.jit.script(
-            JittableSelfAttention_Rels(
-                feats, heads, TKernel, rel_dim
-            )
+        self.layers = layers
+        self.attn_layers = nn.ModuleList(
+            [MultiHeadAttention(heads, d_size, d_size, dropout=dropout)] * (layers)
         )
-        self.dropout = dropout
-        self.feats = feats
+        self.merge_layers = nn.ModuleList(
+            [nn.Sequential(
+                nn.Linear(hidden+d_size, hidden, device=device),
+                nn.ReLU(),
+                nn.Linear(hidden, hidden, device=device)
+            )] * (layers)
+        )
+        # No output activation in case BCELogits loss is used later
+        self.proj_out = nn.Linear(hidden, out, device=device)
 
-    def forward(self, graph, x, start_t, end_t):
-        x = self.norm1(x)
-    
-        batch = torch.arange(x.size(0))
-        k,q,v = self.kqv(x)
+        # Src nodes don't have an edge feature to pass into 
+        # the attention mech. May as well use the free space with
+        # information, rather than just sending in zeros? 
+        self.src_param = nn.parameter.Parameter(
+            torch.rand((1,edge_feats), device=device)
+        )
 
-        futures = []
-        for nid in batch:
-            nid_ = nid.item()
+        # Sample uniform number of neighbors (at least during training) for 
+        # optimized self attention
+        self.neighborhood_size = neighborhood_size
+        self.device = device 
 
-            neighbors,times,rels = graph.one_hop[nid_]
-            t_mask = (times >= start_t).logical_and(times < end_t)
-            t_mask = t_mask.squeeze(-1).nonzero().squeeze(-1)
-            
-            # Neighborhood dropout
-            if t_mask.size(0) > self.dropout and self.training: 
-                idx = torch.randperm(t_mask.size(0))
-                t_mask = t_mask[idx[:self.dropout]]
+    def forward(self, graph, x, start_t=0, end_t=float('inf'), layer=-1, batch=torch.tensor([])):
+        if layer==-1:
+            layer = self.layers
+        
+        # h_0 is just node features
+        if layer == 0:
+            return self.proj_in(x[batch])
 
-            if t_mask.size(0) == 0:
-                futures.append(torch.jit.fork(ret_zero, self.feats))
+        # Generate x for batch nodes
+        src_x = self.forward(graph, x, start_t, end_t, layer=layer-1, batch=batch)
+
+        # Then generate x for neighbors
+        neighbor_data = [graph.one_hop[b.item()] for b in batch]
+        idxs = [(t>start_t).logical_and(t<end_t).squeeze(-1) for _,t,_ in neighbor_data]
+        neighbors, ts, rels = [],[],[]
+        bs = batch.size(0)
+        
+        # Get temporal neighbors and their edge data while subsampling if applicable 
+        non_leaf_nodes = []
+        for i in range(bs):
+            idx = idxs[i]
+
+            # Cant process neighbors of nodes that have no neighbors
+            if idx.size(0) == 0:
                 continue 
             
-            futures.append(
-                torch.jit.fork(
-                    self.neighbor_aggr,  
-                    k,q,v,
-                    neighbors,nid,
-                    t_mask, 
-                    torch.tensor([[start_t]]),times,rels
-                )
+            non_leaf_nodes.append(i)
+            n,t,r = neighbor_data[i]
+
+            # Sample neighborhood with replacement
+            # Guarantees tensors of size self.dropout x d are passed to self attn
+            idx = idx.nonzero()[
+                torch.randint(idx.size(0), (self.neighborhood_size,), device=self.device)
+            ].squeeze(-1)
+            neighbors.append(n[idx])
+            
+            # Storing deltas, not just raw times
+            t = t[idx]
+            ts.append(t.max()-t)
+            rels.append(r[idx])
+        
+        non_leaf_nodes = torch.tensor(non_leaf_nodes, device=self.device)
+
+        # Cat edge features together
+        neighbors = torch.cat(neighbors, dim=-1)
+        ts = torch.cat(ts, dim=0)
+        rels = torch.cat(rels, dim=0)
+        
+        # Avoid redundant calculation 
+        n_batch, n_idx = neighbors.unique(return_inverse=True)
+        neigh_x = self.forward(
+            graph, x, start_t, end_t, layer=layer-1, 
+            batch=n_batch
+        )[n_idx]
+
+        # Now cat together edge data with node data
+        neigh_x = torch.cat([
+            neigh_x, self.tkernel(ts), rels
+        ], dim=-1)
+
+        src_x_in = torch.cat([
+            src_x, 
+            self.tkernel(torch.zeros((1,1))).repeat(bs,1),
+            self.src_param.repeat(bs,1)
+        ], dim=-1)[non_leaf_nodes]
+
+        # B*ns x d -> B x ns x d
+        neigh_x = neigh_x.view(non_leaf_nodes.size(0), self.neighborhood_size, -1)
+
+        # B x d -> B x 1 x d
+        src_x_in = src_x_in.unsqueeze(1)
+
+        # Finally, use attention mechanism 
+        val,attn = self.attn_layers[layer-1](src_x_in, neigh_x, neigh_x)
+        
+        # Put any aggregations of neighbors into matrix, 
+        # nodes with no children are left as zero
+        full_val = torch.zeros(bs,val.size(-1), device=self.device)
+        full_val[non_leaf_nodes] = val.squeeze(1)
+
+        # And like GraphSAGE, cat to the original vector, and FFNN 
+        # B x (hidden + hidden + e_feats + t_feats) -> B x hidden
+        out = self.merge_layers[layer-1](
+            torch.cat(
+                [src_x, full_val], 
+                dim=1
             )
-
-        h = [torch.jit.wait(f) for f in futures]
-        h = torch.cat(h,dim=0)
-
-        # Add in the residual 
-        h_2 = h.add(x) 
-        h = self.norm2(h_2)
-
-        h = torch.cat([x,h], dim=1)
-        h = self.lin(h)
-
-        # Again, add residual from before norm
-        return h+h_2
-
-@torch.jit.script 
-def ret_zero(dim: int):
-    return torch.zeros(1,dim)
-
-from torch.jit import ScriptModule, trace 
-class JittableSelfAttention_Rels(ScriptModule):
-    '''
-    Essentially the same as NeighborAggr, but must have a 
-    deterministic forward function to be compiled for multithreading
-    '''
-    def __init__(self, hidden,heads,TKernel,r_dim):
-        super().__init__()
-        self.hidden = hidden 
-        self.heads = heads
-        self.head_dim = hidden // heads
-        self.norm = math.sqrt(1/self.head_dim)
-
-        #self.t2v = TKernel
-        #self.time_params = KQV(TKernel.dim, hidden)
-        self.edge_params = KQV(r_dim, hidden) # Neither works
-        #self.edge_params = trace(KQV(r_dim, hidden), torch.rand((1,r_dim)))
-        
-        self.hidden = hidden 
-        self.heads = heads
-        self.head_dim = hidden // heads
-        self.norm = math.sqrt(1/self.head_dim)
-
-    @torch.jit.script_method
-    def forward(self, k_,q_,v_, neighbors,nid,mask, start_t,times,rels):
-        neigh = neighbors[mask]
-        k = k_[neigh]
-        q = q_[nid].unsqueeze(0)
-        v = v_[neigh]
-
-        '''
-        # Factor time into the original matrices
-        times = times[mask]
-        t_k, t_q, t_v = self.time_params(
-            self.t2v(torch.cat([start_t,times]))
         )
-        q = q.add(t_q[0])
-        k = k.add(t_k[1:])
-        v = v.add(t_v[1:])
-        '''
 
-        # Add relational info 
-        rels = rels[mask]
-        r_k, _, r_v = self.edge_params(rels)
-        k = k.add(r_k)
-        v = v.add(r_v)
-
-        # Use reshape optimization for multihead attn 
-        # heads x 1 x d/heads
-        q = q.view(1, self.heads, self.head_dim).transpose(0,1)
+        # Final layer, project to embedding dim
+        if layer == self.layers:
+            return self.proj_out(out)
         
-        # heads x d/heads x batch
-        k = k.view(k.size(0), self.heads, self.head_dim)
-        k = k.transpose(-1,1).transpose(-1,0)
-
-        # heads x batch x d/heads
-        v = v.view(v.size(0),self.heads,self.head_dim).transpose(0,1)
-
-        # Perform self-attention calculation
-        # output is heads x 1 x d/heads
-        # then, "catted" together as 1 x d 
-        attn = torch.softmax((q @ k) * self.norm, dim=-1)        
-        return (attn @ v).view(1,self.hidden)
+        # Otherwise
+        return out 
