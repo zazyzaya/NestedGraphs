@@ -9,11 +9,11 @@ class TimeKernel(nn.Module):
     Nearly identical to Time2Vec but using the TGAT version just
     to be safe
     '''
-    def __init__(self, dim):
+    def __init__(self, dim, device=torch.device('cpu')):
         super().__init__()
         assert dim % 2 == 0, 'TimeKernel must have an even output dimension'
         
-        self.w = nn.Linear(1,dim//2)
+        self.w = nn.Linear(1,dim//2, device=device)
         self.norm = math.sqrt(1 / (dim//2))
         self.dim = dim
 
@@ -60,16 +60,16 @@ class ScaledDotProductAttention(torch.nn.Module):
 class MultiHeadAttention(nn.Module):
     ''' Multi-Head Attention module '''
 
-    def __init__(self, n_head, in_dim, hidden_dim, dropout=0.1):
+    def __init__(self, n_head, in_dim, hidden_dim, dropout=0.1, device=torch.device('cpu')):
         super().__init__()
 
         self.n_head = n_head
         self.d_k = hidden_dim
         self.d_v = hidden_dim
 
-        self.w_qs = nn.Linear(in_dim, n_head * hidden_dim, bias=False)
-        self.w_ks = nn.Linear(in_dim, n_head * hidden_dim, bias=False)
-        self.w_vs = nn.Linear(in_dim, n_head * hidden_dim, bias=False)
+        self.w_qs = nn.Linear(in_dim, n_head * hidden_dim, bias=False, device=device)
+        self.w_ks = nn.Linear(in_dim, n_head * hidden_dim, bias=False, device=device)
+        self.w_vs = nn.Linear(in_dim, n_head * hidden_dim, bias=False, device=device)
         nn.init.normal_(self.w_qs.weight, mean=0, std=np.sqrt(2.0 / (in_dim + hidden_dim)))
         nn.init.normal_(self.w_ks.weight, mean=0, std=np.sqrt(2.0 / (in_dim + hidden_dim)))
         nn.init.normal_(self.w_vs.weight, mean=0, std=np.sqrt(2.0 / (in_dim + hidden_dim)))
@@ -77,7 +77,7 @@ class MultiHeadAttention(nn.Module):
         self.attention = ScaledDotProductAttention(temperature=np.power(hidden_dim, 0.5), attn_dropout=dropout)
         self.layer_norm = nn.LayerNorm(in_dim)
 
-        self.fc = nn.Linear(n_head * hidden_dim, in_dim)
+        self.fc = nn.Linear(n_head * hidden_dim, in_dim, device=device)
         
         nn.init.xavier_normal_(self.fc.weight)
 
@@ -138,7 +138,7 @@ class TGAT(nn.Module):
 
         self.layers = layers
         self.attn_layers = nn.ModuleList(
-            [MultiHeadAttention(heads, d_size, d_size, dropout=dropout)] * (layers)
+            [MultiHeadAttention(heads, d_size, d_size, dropout=dropout, device=device)] * (layers)
         )
         self.merge_layers = nn.ModuleList(
             [nn.Sequential(
