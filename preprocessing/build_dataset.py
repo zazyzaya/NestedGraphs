@@ -1,6 +1,6 @@
 import sys 
 import pickle as pkl
-from preprocessing.build_hostgraph import build_full_graphs
+from .build_hostgraph import build_full_graphs
 
 DAY = int(sys.argv[1])
 
