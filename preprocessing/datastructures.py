@@ -425,7 +425,7 @@ class FullGraph(HostGraph):
             # Update csr matrix pointer
             self.csr_ptr.append(self.csr_ptr[-1] + t.size(0))
 
-        self.edge_index = torch.cat(ei, dim=1)
+        self.edge_index = torch.cat(ei, dim=0)
         self.edge_attr = torch.cat(rels, dim=0)
         self.edge_ts = torch.cat(ts, dim=0)
 

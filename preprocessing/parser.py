@@ -107,7 +107,7 @@ def build_uuid_db():
         pkl.dump(out_db, f)
 
 def load_group(fid, file_path, total):
-    with open('proc_idx.pkl', 'rb') as f:
+    with open('proc_ids.pkl', 'rb') as f:
         objects = pkl.load(f)
 
     with gzip.open(file_path, 'rb') as f:
@@ -154,6 +154,9 @@ def load_group(fid, file_path, total):
             
             if row['object'] == 'PROCESS': 
                 file_name = row['hostname'].split('.')[0].lower()+'.csv'
+
+                pid = row['pid']
+                ppid = row['ppid']
 
                 # Try to get info from file before querying large db 
                 if 'image_path' in row['properties']:
@@ -209,7 +212,7 @@ def load_group(fid, file_path, total):
 
 if __name__ == '__main__':
     # Load in all paths in parallel
-    build_uuid_db()
+    #build_uuid_db()
     Parallel(n_jobs=JOBS, prefer='processes')(
         delayed(load_group)(fid, path, total_files) for fid,path in enumerate(file_paths)
     )
