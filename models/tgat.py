@@ -162,16 +162,16 @@ class TGAT(nn.Module):
         self.neighborhood_size = neighborhood_size
         self.device = device 
 
-    def forward(self, graph, x, start_t=0., end_t=float('inf'), layer=-1, batch=torch.tensor([])):
+    def forward(self, graph, start_t=0., end_t=float('inf'), layer=-1, batch=torch.tensor([])):
         if layer==-1:
             layer = self.layers
         
         # h_0 is just node features
         if layer == 0:
-            return self.proj_in(x[batch])
+            return self.proj_in(graph.x[batch])
 
         # Generate x for batch nodes
-        src_x = self.forward(graph, x, start_t, end_t, layer=layer-1, batch=batch)
+        src_x = self.forward(graph, start_t, end_t, layer=layer-1, batch=batch)
 
         # Then generate x for neighbors
         neighbor_data = [graph.get_one_hop(b.item()) for b in batch]
@@ -223,7 +223,7 @@ class TGAT(nn.Module):
         # Avoid redundant calculation 
         n_batch, n_idx = neighbors.unique(return_inverse=True)
         neigh_x = self.forward(
-            graph, x, start_t, end_t, layer=layer-1, 
+            graph, start_t, end_t, layer=layer-1, 
             batch=n_batch.long()
         )[n_idx]
 
