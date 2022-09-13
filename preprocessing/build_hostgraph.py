@@ -4,11 +4,11 @@ from dateutil.parser import isoparse
 from joblib import Parallel, delayed
 from tqdm import tqdm
 
-from hasher import proc_feats, file_feats, reg_feats, path_to_tensor
-from datastructures import HostGraph, FullGraph, NodeList
+from .hasher import proc_feats, file_feats, reg_feats, path_to_tensor
+from .datastructures import HostGraph, FullGraph, NodeList
 
 # Globals 
-JOBS = 8
+JOBS = 16
 SOURCE = '/mnt/raid0_24TB/datasets/NCR2/nested_optc/hosts/'
 
 # Hyper parameters

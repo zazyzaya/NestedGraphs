@@ -5,10 +5,7 @@ import re
 import gzip
 import pickle as pkl
 import csv
-import pickle
 from joblib import Parallel, delayed
-from functools import reduce
-from dateutil.parser import isoparse
 
 # globals
 JOBS=16

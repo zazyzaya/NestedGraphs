@@ -1,6 +1,6 @@
 import sys 
 import pickle as pkl
-from build_hostgraph import build_full_graphs
+from preprocessing.build_hostgraph import build_full_graphs
 
 DAY = int(sys.argv[1])
 
@@ -11,7 +11,7 @@ for i in range(len(bids)):
     g = benign[i]
     id = bids[i]
 
-    with open('../inputs/Sept%d/benign/full_graph%d.pkl' % (DAY,id), 'wb+') as f:
+    with open('inputs/Sept%d/benign/full_graph%d.pkl' % (DAY,id), 'wb+') as f:
         pkl.dump(g, f)
 
 # Mal
@@ -21,5 +21,5 @@ for i in range(len(mids)):
     g = malicious[i]
     id = mids[i]
 
-    with open('../inputs/Sept%d/mal/full_graph%d.pkl' % (DAY,id), 'wb+') as f:
+    with open('inputs/Sept%d/mal/full_graph%d.pkl' % (DAY,id), 'wb+') as f:
         pkl.dump(g, f)
