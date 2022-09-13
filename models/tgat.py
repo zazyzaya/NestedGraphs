@@ -162,7 +162,7 @@ class TGAT(nn.Module):
         self.neighborhood_size = neighborhood_size
         self.device = device 
 
-    def forward(self, graph, x, start_t=0, end_t=float('inf'), layer=-1, batch=torch.tensor([])):
+    def forward(self, graph, x, start_t=0., end_t=float('inf'), layer=-1, batch=torch.tensor([])):
         if layer==-1:
             layer = self.layers
         
@@ -174,8 +174,11 @@ class TGAT(nn.Module):
         src_x = self.forward(graph, x, start_t, end_t, layer=layer-1, batch=batch)
 
         # Then generate x for neighbors
-        neighbor_data = [graph.one_hop[b.item()] for b in batch]
-        idxs = [(t>start_t).logical_and(t<end_t).squeeze(-1) for _,t,_ in neighbor_data]
+        neighbor_data = [graph.get_one_hop(b.item()) for b in batch]
+        idxs = [
+            (t>start_t).logical_and(t<end_t).squeeze(-1) 
+            for _,t,_ in neighbor_data 
+        ]
         neighbors, ts, rels = [],[],[]
         bs = batch.size(0)
         
@@ -183,19 +186,26 @@ class TGAT(nn.Module):
         non_leaf_nodes = []
         for i in range(bs):
             idx = idxs[i]
-
-            # Cant process neighbors of nodes that have no neighbors
-            if idx.size(0) == 0:
-                continue 
-            
-            non_leaf_nodes.append(i)
             n,t,r = neighbor_data[i]
+            
+            # Skip neighborless nodes
+            if not n.size(0):
+                continue 
+
+            non_leaf_nodes.append(i)
+
+            # For some reason, the list comp above makes nodes with a single neighbor 
+            # into 1d tensors. Adding this check seems easier than fixing that issue
+            if n.dim() == 1:  
+                idx = torch.zeros((self.neighborhood_size,), dtype=torch.long, device=self.device)
 
             # Sample neighborhood with replacement
             # Guarantees tensors of size self.dropout x d are passed to self attn
-            idx = idx.nonzero()[
-                torch.randint(idx.size(0), (self.neighborhood_size,), device=self.device)
-            ].squeeze(-1)
+            else:
+                idx = idx.nonzero()[
+                    torch.randint(idx.size(0), (self.neighborhood_size,), device=self.device)
+                ].squeeze(-1)
+            
             neighbors.append(n[idx])
             
             # Storing deltas, not just raw times
@@ -207,14 +217,14 @@ class TGAT(nn.Module):
 
         # Cat edge features together
         neighbors = torch.cat(neighbors, dim=-1)
-        ts = torch.cat(ts, dim=0)
+        ts = torch.cat(ts, dim=0).unsqueeze(-1)
         rels = torch.cat(rels, dim=0)
         
         # Avoid redundant calculation 
         n_batch, n_idx = neighbors.unique(return_inverse=True)
         neigh_x = self.forward(
             graph, x, start_t, end_t, layer=layer-1, 
-            batch=n_batch
+            batch=n_batch.long()
         )[n_idx]
 
         # Now cat together edge data with node data

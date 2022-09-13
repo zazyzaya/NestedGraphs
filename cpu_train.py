@@ -16,7 +16,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import Adam
 from tqdm import tqdm 
 
-from models.batch_tgat import BatchTGAT 
+from models.tgat import TGAT
 
 N_JOBS = 12 # How many worker processes will train the model
 P_THREADS = 1 # How many threads each worker gets
@@ -118,7 +118,7 @@ def proc_job(rank, world_size, hp):
     with open(graphs[0],'rb') as f:
         g = pickle.load(f)
 
-    tgat = BatchTGAT(
+    tgat = TGAT(
         g.x.size(1), g.edge_feat_dim, 
         hp.tsize, hp.hidden, hp.emb_size, 
         hp.layers, hp.heads,

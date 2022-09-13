@@ -58,7 +58,6 @@ hp = HYPERPARAMS = SimpleNamespace(
     epochs=100, lr=0.005
 )       
 
-
 def step(model, graph, batch, tau=0.05): 
     '''
     Uses self-contrastive learning with the dropout that's already there
@@ -73,8 +72,8 @@ def step(model, graph, batch, tau=0.05):
 
     # Pass the same data through the net twice to get embeddings with
     # different dropout masks 
-    a = model(graph, graph.x.to(DEVICE), batch=batch)
-    b = model(graph, graph.x.to(DEVICE), batch=batch)
+    a = model(graph, graph.x, batch=batch)
+    b = model(graph, graph.x, batch=batch)
     
     # Compute cosine sim manually 
     a_norm = a / a.norm(dim=1)[:, None]
@@ -101,7 +100,7 @@ def train(hp):
         g = pickle.load(f)
 
     tgat = TGAT(
-        g.x.size(1), g.edge_feat_dim, 
+        g.x.size(1), 9, 
         hp.tsize, hp.hidden, hp.emb_size, 
         hp.layers, hp.heads,
         neighborhood_size=hp.nsize,
@@ -120,6 +119,8 @@ def train(hp):
         for i,g_file in enumerate(graphs):
             with open(g_file,'rb') as f:
                 g = pickle.load(f)
+
+            g = g.to(DEVICE)
 
             # Get this processes batch of jobs. In this case, 
             # nids of nodes that represent processes (x_n = [1,0,0,...,0])

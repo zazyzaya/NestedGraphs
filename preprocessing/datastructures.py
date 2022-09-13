@@ -417,6 +417,7 @@ class FullGraph(HostGraph):
             rel = torch.tensor(rel, dtype=torch.long)
             rel_nonsparse = torch.zeros(rel.size(0), rels_max+1)
             rel_nonsparse[torch.arange(rel.size(0)), rel] = 1
+            rels.append(rel_nonsparse)
 
             # Add to list of tensors
             t = torch.tensor(t); neigh = torch.tensor(neigh)
@@ -429,6 +430,8 @@ class FullGraph(HostGraph):
         self.edge_attr = torch.cat(rels, dim=0)
         self.edge_ts = torch.cat(ts, dim=0)
 
+        self.edge_feat_dim = rels_max
+
 
     def get_one_hop(self, idx):
         assert self.ready, "Cannot call get_one_hop until graph is finalized"
@@ -436,10 +439,12 @@ class FullGraph(HostGraph):
         st = self.csr_ptr[idx]
         end = self.csr_ptr[idx+1]
 
-        return self.edge_index[:,st:end], self.edge_attr[st:end], self.edge_ts[st:end]
+        return self.edge_index[st:end], self.edge_ts[st:end], self.edge_attr[st:end]
 
     def to(self, device):
         self.x = self.x.to(device)
         self.edge_index = self.edge_index.to(device)
         self.edge_attr = self.edge_attr.to(device)
         self.edge_ts = self.edge_ts.to(device)
+
+        return self 
