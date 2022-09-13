@@ -417,11 +417,10 @@ class FullGraph(HostGraph):
             rel = torch.tensor(rel, dtype=torch.long)
             rel_nonsparse = torch.zeros(rel.size(0), rels_max+1)
             rel_nonsparse[torch.arange(rel.size(0)), rel] = 1
-            rels.append(rel_nonsparse)
 
             # Add to list of tensors
             t = torch.tensor(t); neigh = torch.tensor(neigh)
-            ei.append(neigh); ts.append(t); rels.append(rel)
+            ei.append(neigh); ts.append(t); rels.append(rel_nonsparse)
 
             # Update csr matrix pointer
             self.csr_ptr.append(self.csr_ptr[-1] + t.size(0))

@@ -8,7 +8,7 @@ from .hasher import proc_feats, file_feats, reg_feats, path_to_tensor
 from .datastructures import HostGraph, FullGraph, NodeList
 
 # Globals 
-JOBS = 16
+JOBS = 8
 SOURCE = '/mnt/raid0_24TB/datasets/NCR2/nested_optc/hosts/'
 
 # Hyper parameters
@@ -211,11 +211,11 @@ def build_full_graph(host: int, day: int):
     g.finalize(9) 
     return g
 
-def build_full_graphs(hosts, day):
+def build_full_graphs(hosts, day, jobs=JOBS):
     '''
     Given a sequence of hosts, build graphs for them in parallel
     '''
-    return Parallel(n_jobs=min(JOBS,len(hosts)), prefer='processes')(
+    return Parallel(n_jobs=min(jobs, len(hosts)), prefer='processes')(
         delayed(build_full_graph)(h, day) for h in hosts
     )
 
