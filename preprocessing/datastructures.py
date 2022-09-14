@@ -429,7 +429,7 @@ class FullGraph(HostGraph):
         self.edge_attr = torch.cat(rels, dim=0)
         self.edge_ts = torch.cat(ts, dim=0)
 
-        self.edge_feat_dim = rels_max
+        self.edge_feat_dim = rels_max+1
 
 
     def get_one_hop(self, idx):

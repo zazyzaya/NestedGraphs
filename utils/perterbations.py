@@ -2,6 +2,7 @@ import numpy as np
 import torch 
 
 from .datastructures import FullGraph
+from .graph_utils import get_src, update_ptr
 
 '''
 Perterbations for graph contrastive learning. Continuing work of 
@@ -125,39 +126,6 @@ def attr_mask(graph, p=0.1):
     x[torch.rand(x.size(0)) <= p] = torch.zeros(x.size(1))
 
     return PseudoGraph(graph, x=x)
-
-
-def get_src(dst, csr_ptr):
-    src = torch.zeros(dst.size())
-
-    for i in range(len(csr_ptr)-1):
-        src[csr_ptr[i] : csr_ptr[i+1]] = i 
-
-    return src 
-
-def update_ptr(src):
-    '''
-    Given the (sorted) source list, return the compressed
-    version in CSR format 
-    '''
-    idx,cnt = src.unique(return_counts=True)
-    ptr = torch.zeros((idx.max()+2,), dtype=torch.long)
-    
-    last = -1
-    offset = 0
-    for i in range(idx.size(0)):
-        # Node i had neighbors
-        if last+1 != idx[i]:
-            no_neighbors = idx[i]-last-1
-            for j in range(no_neighbors):
-                ptr[i+1+offset+j] = ptr[i+offset]
-            
-            offset += no_neighbors
-        
-        ptr[i+1+offset] = ptr[i+offset]+cnt[i]
-        last = idx[i]
-    
-    return ptr 
 
 
 class PseudoGraph(FullGraph):

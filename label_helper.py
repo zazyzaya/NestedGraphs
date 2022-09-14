@@ -1,9 +1,18 @@
 import json 
 import pickle
+import socket
 from tqdm import tqdm  
 import datetime as dt 
 
-HOME = '/mnt/raid0_24TB/isaiah/code/NestedGraphs/'
+# Depending on which machine we're running on 
+if socket.gethostname() == 'colonial0':
+    HOME = '/mnt/raid0_24TB/isaiah/code/NestedGraphs'
+
+# Note, this is running over sshfs so it may be slower to load
+# may be worth it to make a local copy? 
+elif socket.gethostname() == 'orion.ece.seas.gwu.edu':
+    HOME = '/home/isaiah/code/NestedGraphs/'
+
 MAL_GRAPHS = [201,402,660,104,205,321,255,355,503,462,559,419,609,771,955,874,170]
 
 # Schema:

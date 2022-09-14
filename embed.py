@@ -8,16 +8,15 @@ from tqdm import tqdm
 from models.tgat import TGAT 
 
 strip_gid = lambda x : x.split('/')[-1].split('.')[0][5:]
-HOME = '/mnt/raid0_24TB/isaiah/code/NestedGraphs/'
+HOME = '/home/isaiah/code/NestedGraphs/'
+DEVICE = 0
 
-sd,args,kwargs = torch.load(HOME+'saved_models/embedder/tgat_enc_60epochs.pkl')
-model = TGAT(*args,**kwargs)
+sd,args,kwargs = torch.load(HOME+'saved_models/tgat.pkl')
+model = TGAT(*args,**kwargs).to(DEVICE)
 model.load_state_dict(sd)
 model.eval()
 
 DAY = 23# int(sys.argv[1])
-torch.set_num_threads(8)
-
 with torch.no_grad():
     print("Embedding benign hosts")
     prog = tqdm(glob.glob(HOME+'inputs/Sept%d/benign/full_graph*.pkl' % DAY))
@@ -26,10 +25,12 @@ with torch.no_grad():
         prog.desc = gid 
 
         with open(fname, 'rb') as f:
-            graph = pickle.load(f)
+            g = pickle.load(f).to(DEVICE)
 
-        zs = model(graph,graph.x,0,graph.edge_ts.max())
+        procs = (g.x[:,0] == 1).nonzero().squeeze(-1)
+        zs = model(g, batch=procs)
         torch.save(zs, 'inputs/Sept%d/benign/tgat_emb%s.pkl' % (DAY,gid))
+        del g, zs
 
     prog.close() 
     
@@ -41,10 +42,11 @@ with torch.no_grad():
         prog.desc = gid 
 
         with open(fname, 'rb') as f:
-            graph = pickle.load(f)
-
-        with torch.no_grad():
-            zs = model(graph,graph.x,0,graph.edge_ts.max())
-            torch.save(zs, HOME+'inputs/Sept%d/mal/tgat_emb%s.pkl' % (DAY,gid))
+            g = pickle.load(f).to(DEVICE)
+        
+        procs = (g.x[:,0] == 1).nonzero().squeeze(-1)
+        zs = model(g,batch=procs)
+        torch.save(zs, HOME+'inputs/Sept%d/mal/tgat_emb%s.pkl' % (DAY,gid))
+        del g, zs
 
     prog.close()

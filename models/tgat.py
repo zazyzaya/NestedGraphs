@@ -75,7 +75,7 @@ class MultiHeadAttention(nn.Module):
         nn.init.normal_(self.w_vs.weight, mean=0, std=np.sqrt(2.0 / (in_dim + hidden_dim)))
 
         self.attention = ScaledDotProductAttention(temperature=np.power(hidden_dim, 0.5), attn_dropout=dropout)
-        self.layer_norm = nn.LayerNorm(in_dim)
+        self.layer_norm = nn.LayerNorm(in_dim, device=device)
 
         self.fc = nn.Linear(n_head * hidden_dim, in_dim, device=device)
         
@@ -234,7 +234,7 @@ class TGAT(nn.Module):
 
         src_x_in = torch.cat([
             src_x, 
-            self.tkernel(torch.zeros((1,1))).repeat(bs,1),
+            self.tkernel(torch.zeros((1,1), device=self.device)).repeat(bs,1),
             self.src_param.repeat(bs,1)
         ], dim=-1)[non_leaf_nodes]
 
@@ -267,3 +267,27 @@ class TGAT(nn.Module):
         
         # Otherwise
         return out 
+
+
+class TGATGraph(nn.Module):
+    def __init__(self, in_feats, edge_feats, t_feats, hidden, out, layers, heads, neighborhood_size=64, dropout=0.1, device=torch.device('cpu')):
+        super().__init__()
+        
+        self.tgat = TGAT(in_feats, edge_feats, t_feats, hidden, out, layers, heads, neighborhood_size, dropout, device)
+        self.pred_net = nn.Sequential(
+            nn.Linear(out, out*2, device=device),
+            nn.ReLU(),
+            nn.Linear(out*2, out, device=device), 
+            nn.ReLU() 
+        )
+
+    def embed(self, graph, start_t=0., end_t=float('inf'), batch=torch.tensor([])):
+        return self.tgat(graph, start_t, end_t, batch=batch)
+
+    def forward(self, graph, start_t=0., end_t=float('inf'), batch=torch.tensor([])):
+        zs = self.embed(graph, start_t, end_t, batch=batch)
+        
+        # Readout fn is just sum as proposed by SAGE
+        zs = zs.sum(dim=0)
+
+        return self.pred_net(zs)

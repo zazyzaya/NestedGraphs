@@ -14,7 +14,8 @@ from torch.nn import BCEWithLogitsLoss, MSELoss
 from torch.optim import Adam
 from tqdm import tqdm 
 
-from models.tgat import TGAT 
+from models.tgat import TGAT
+from utils.perterbations import subgraph, drop_edge
 
 P_THREADS = 16 # How many threads each worker gets
 DEVICE = 3     # Which GPU (for now just use 1)
@@ -58,7 +59,7 @@ hp = HYPERPARAMS = SimpleNamespace(
     epochs=100, lr=0.005
 )       
 
-def step(model, graph, batch, tau=0.05): 
+def self_cl_step(model, graph, batch, tau=0.05): 
     '''
     Uses self-contrastive learning with the dropout that's already there
     to produce embeddings that are as self-similar as possible
@@ -72,8 +73,8 @@ def step(model, graph, batch, tau=0.05):
 
     # Pass the same data through the net twice to get embeddings with
     # different dropout masks 
-    a = model(graph, graph.x, batch=batch)
-    b = model(graph, graph.x, batch=batch)
+    a = model(graph, batch=batch)
+    b = model(graph, batch=batch)
     
     # Compute cosine sim manually 
     a_norm = a / a.norm(dim=1)[:, None]
@@ -89,6 +90,8 @@ def step(model, graph, batch, tau=0.05):
 
     return (-torch.log(pos/neg)).mean()
 
+def cl_step(model, g1, g2, p1=subgraph, p2=drop_edge):
+    pass
 
 def train(hp):
     # Sets number of threads used by this worker
@@ -100,7 +103,7 @@ def train(hp):
         g = pickle.load(f)
 
     tgat = TGAT(
-        g.x.size(1), 9, 
+        g.x.size(1), g.edge_feat_dim+1, 
         hp.tsize, hp.hidden, hp.emb_size, 
         hp.layers, hp.heads,
         neighborhood_size=hp.nsize,
@@ -126,7 +129,7 @@ def train(hp):
             # nids of nodes that represent processes (x_n = [1,0,0,...,0])
             procs = (g.x[:,0] == 1).nonzero().squeeze(-1)
             opt.zero_grad()
-            loss = step(tgat, g, procs)
+            loss = self_cl_step(tgat, g, procs)
             loss.backward()
             opt.step() 
             
@@ -135,10 +138,10 @@ def train(hp):
 
             torch.save(
                 (
-                    tgat.module.state_dict(), 
-                    tgat.module.args, 
-                    tgat.module.kwargs
-                ), 'saved_models/embedder/btgan.pkl'
+                    tgat.state_dict(), 
+                    tgat.args, 
+                    tgat.kwargs
+                ), 'saved_models/tgat.pkl'
             )
 
         prog.close() 

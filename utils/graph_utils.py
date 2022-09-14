@@ -1,16 +1,26 @@
 import json 
+import socket 
 
 import torch 
 from torch_geometric import nn as geo_nn
 from torch_geometric.utils import dense_to_sparse, add_remaining_self_loops
 
-HOME = '/mnt/raid0_24TB/isaiah/code/NestedGraphs/'
+from .perterbations import get_src
+
+# Depending on which machine we're running on 
+if socket.gethostname() == 'colonial0':
+    HOME = '/mnt/raid0_24TB/isaiah/code/NestedGraphs/'
+
+# Note, this is running over sshfs so it may be slower to load
+# may be worth it to make a local copy? 
+elif socket.gethostname() == 'orion.ece.seas.gwu.edu':
+    HOME = '/home/isaiah/code/NestedGraphs/'
 
 def propagate_labels(g, day, label_f=HOME+'inputs/manual_labels.txt'):
     with open(label_f, 'r') as f:
         anoms = json.loads(f.read())
 
-    labels = torch.zeros(g.num_nodes)
+    labels = torch.zeros(g.x.size(0))
     if str(g.gid) not in anoms or str(day) not in anoms[str(g.gid)]:
         return labels 
 
@@ -25,8 +35,11 @@ def propagate_labels(g, day, label_f=HOME+'inputs/manual_labels.txt'):
         labels[d] = 1
 
     # Only consider direct parent-child relations for labeling
-    ei = g.edge_index 
-    ei = ei[:, g.edge_attr==0]
+    dst = g.edge_index 
+    src = get_src(dst, g.csr_ptr)
+
+    ei = torch.stack([src,dst], dim=0).long()
+    ei = ei[:, g.edge_attr[:,0]==0]
 
     while domain:
         mal = domain.pop()
@@ -62,3 +75,51 @@ def only_type_edges(g, etype):
     ei = g.edge_index 
     ei = ei[:,g.edge_attr==etype]
     g.edge_index = ei 
+
+
+def get_src(dst, csr_ptr):
+    '''
+    Given csr representation of edges, return non-sparse source vector
+    '''
+    src = torch.zeros(dst.size())
+
+    for i in range(len(csr_ptr)-1):
+        src[csr_ptr[i] : csr_ptr[i+1]] = i 
+
+    return src 
+
+def update_ptr(src):
+    '''
+    Given the (sorted) source list, return the compressed
+    version in CSR format 
+    '''
+    idx,cnt = src.unique(return_counts=True)
+    ptr = torch.zeros((idx.max()+2,), dtype=torch.long)
+    
+    last = -1
+    offset = 0
+    for i in range(idx.size(0)):
+        # Node i had neighbors
+        if last+1 != idx[i]:
+            no_neighbors = idx[i]-last-1
+            for j in range(no_neighbors):
+                ptr[i+1+offset+j] = ptr[i+offset]
+            
+            offset += no_neighbors
+        
+        ptr[i+1+offset] = ptr[i+offset]+cnt[i]
+        last = idx[i]
+    
+    return ptr 
+
+
+def reindex(batch, ei):
+    bmin = batch.min()
+    batch = batch-bmin 
+    ei = ei-bmin 
+
+    id_map = torch.zeros(batch.max()+1, dtype=torch.long)
+    for i,b in enumerate(batch):
+        id_map[b] = i 
+
+    

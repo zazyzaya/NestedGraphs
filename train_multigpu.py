@@ -1,10 +1,8 @@
 import glob
-import json
-import math 
 import os 
 import pickle
 import random
-import time
+import socket
 from types import SimpleNamespace 
 
 import torch 
@@ -17,6 +15,7 @@ from torch.optim import Adam
 from tqdm import tqdm 
 
 from models.tgat import TGAT 
+#from utils.graph_utils import get_src
 
 N_JOBS = 12 # How many worker processes will train the model
 P_THREADS = 1 # How many threads each worker gets
@@ -42,9 +41,20 @@ J,T,time
 '''
 
 DAY = 23 
-HOME = '/mnt/raid0_24TB/isaiah/code/NestedGraphs/inputs/Sept%d/benign/' % DAY 
+
+# Depending on which machine we're running on 
+if socket.gethostname() == 'colonial0':
+    HOME = '/mnt/raid0_24TB/isaiah/code/NestedGraphs/inputs/'
+
+# Note, this is running over sshfs so it may be slower to load
+# may be worth it to make a local copy? 
+elif socket.gethostname() == 'orion.ece.seas.gwu.edu':
+    HOME = '/home/isaiah/code/NestedGraphs/inputs/'
+
+HOME = HOME + 'Sept%d/benign/' % DAY 
+
 hp = HYPERPARAMS = SimpleNamespace(
-    tsize=64, hidden=64, heads=16, 
+    tsize=64, hidden=32, heads=8, 
     emb_size=128, layers=3, nsize=64,
     epochs=100, lr=0.005
 )
@@ -85,8 +95,8 @@ def step(model, graph, batch, tau=0.05):
 
     # Pass the same data through the net twice to get embeddings with
     # different dropout masks 
-    a = model(graph, graph.x, batch=batch)
-    b = model(graph, graph.x, batch=batch)
+    a = model(graph, batch=batch)
+    b = model(graph, batch=batch)
     
     # Compute cosine sim manually 
     a_norm = a / a.norm(dim=1)[:, None]
@@ -101,6 +111,24 @@ def step(model, graph, batch, tau=0.05):
     neg = (res.sum(dim=1)-pos)+1e-9
 
     return (-torch.log(pos/neg)).mean()
+
+
+def _step(model, graph, batch, holdout=0.75):
+    '''
+    Uses dynamic link prediction as loss
+    '''
+    
+    max_ts = torch.quantile(graph.edge_ts, holdout)
+    z = model(graph, batch=batch, end_t=max_ts)
+
+    ei = torch.cat([get_src(graph.edge_index, graph.csr_ptr), graph.edge_index], dim=0).long()
+    future_edges = ei[:,graph.edge_ts > max_ts]
+
+    # Can only check embeddings of nodes that were in batch
+    known_src = (future_edges[0] == batch.unsqueeze(-1)).sum(dim=0)
+    known_dst = (future_edges[1] == batch.unsqueeze(-1)).sum(dim=0)
+    known_edges = future_edges[:, known_src.logical_and(known_dst)]
+
 
 
 def proc_job(rank, world_size, hp):
@@ -118,27 +146,28 @@ def proc_job(rank, world_size, hp):
     with open(graphs[0],'rb') as f:
         g = pickle.load(f)
 
-    tgat = BatchTGAT(
-        g.x.size(1), g.edge_feat_dim, 
+    tgat = TGAT(
+        g.x.size(1), g.edge_feat_dim+1, 
         hp.tsize, hp.hidden, hp.emb_size, 
         hp.layers, hp.heads,
-        neighborhood_size=hp.nsize
+        neighborhood_size=hp.nsize,
+        device=rank
     )
 
-    tgat = DDP(tgat)
+    tgat = DDP(tgat, device_ids=[rank])
     opt = Adam(tgat.parameters(), lr=hp.lr)
     loss = torch.tensor([float('nan')])
     for e in range(hp.epochs):
         random.shuffle(graphs)
         if rank==0:
             prog = tqdm(
-                total=len(graphs)*2, 
+                total=len(graphs), 
                 desc='[%d-%d] Loss: %0.4f' % (e,0,loss.item())
             )
 
         for i,g_file in enumerate(graphs):
             with open(g_file,'rb') as f:
-                g = pickle.load(f)
+                g = pickle.load(f).to(rank)
 
             # Get this processes batch of jobs. In this case, 
             # nids of nodes that represent processes (x_n = [1,0,0,...,0])
@@ -153,21 +182,17 @@ def proc_job(rank, world_size, hp):
             '''
             
             costs = [
-                (min(g.one_hop[p.item()][0].size(0), hp.nsize), p.item())
+                (min(g.get_one_hop(p.item())[0].size(0), hp.nsize), p.item())
                 for p in procs
             ]
-            my_batch = torch.tensor(fair_scheduler(world_size, costs)[rank])
+            my_batch = torch.tensor(fair_scheduler(world_size, costs)[rank]).to(rank)
             opt.zero_grad()
             loss = step(tgat, g, my_batch)
-            if rank==0:
-                prog.desc = '[%d-%d] Loss: %0.4f (bwd...)' % (e,i,loss.item())
-                prog.update()
-
             loss.backward()
             opt.step() 
             
             if rank==0:
-                prog.desc = '[%d-%d] Loss: %0.4f (fwd...)' % (e,i+1,loss.item())
+                prog.desc = '[%d-%d] Loss: %0.4f' % (e,i+1,loss.item())
                 prog.update()
 
                 torch.save(
@@ -175,8 +200,11 @@ def proc_job(rank, world_size, hp):
                         tgat.module.state_dict(), 
                         tgat.module.args, 
                         tgat.module.kwargs
-                    ), 'saved_models/embedder/btgan.pkl'
+                    ), 'saved_models/tgat.pkl'
                 )
+
+            # Try to save some memory 
+            del g,my_batch
 
         if rank==0:
             prog.close() 
@@ -188,7 +216,7 @@ def proc_job(rank, world_size, hp):
 
 
 def main(hp):
-    world_size = N_JOBS
+    world_size = 4
     mp.spawn(proc_job,
         args=(world_size,hp),
         nprocs=world_size,
