@@ -165,6 +165,7 @@ class TGAT(nn.Module):
     def forward(self, graph, start_t=0., end_t=float('inf'), layer=-1, batch=torch.tensor([])):
         if layer==-1:
             layer = self.layers
+            graph = graph.to(self.device)
         
         # h_0 is just node features
         if layer == 0:

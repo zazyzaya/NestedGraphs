@@ -54,7 +54,7 @@ elif socket.gethostname() == 'orion.ece.seas.gwu.edu':
 HOME = HOME + 'Sept%d/benign/' % DAY 
 
 hp = HYPERPARAMS = SimpleNamespace(
-    tsize=64, hidden=32, heads=8, 
+    tsize=64, hidden=64, heads=16, 
     emb_size=128, layers=3, nsize=64,
     epochs=100, lr=0.005
 )
@@ -81,7 +81,7 @@ def fair_scheduler(n_workers, costs):
         
 
 
-def step(model, graph, batch, tau=0.05): 
+def self_sim_step(model, graph, batch, tau=0.05): 
     '''
     Uses self-contrastive learning with the dropout that's already there
     to produce embeddings that are as self-similar as possible
@@ -113,7 +113,7 @@ def step(model, graph, batch, tau=0.05):
     return (-torch.log(pos/neg)).mean()
 
 
-def _step(model, graph, batch, holdout=0.75):
+def generate_step(model, graph, batch, holdout=0.75):
     '''
     Uses dynamic link prediction as loss
     '''
@@ -135,7 +135,7 @@ def proc_job(rank, world_size, hp):
     # DDP info
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = '42069'
-    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+    dist.init_process_group("nccl", rank=rank, world_size=world_size)
 
     # Sets number of threads used by this worker
     torch.set_num_threads(P_THREADS)

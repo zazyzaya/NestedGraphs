@@ -5,8 +5,6 @@ import torch
 from torch_geometric import nn as geo_nn
 from torch_geometric.utils import dense_to_sparse, add_remaining_self_loops
 
-from .perterbations import get_src
-
 # Depending on which machine we're running on 
 if socket.gethostname() == 'colonial0':
     HOME = '/mnt/raid0_24TB/isaiah/code/NestedGraphs/'
@@ -87,6 +85,11 @@ def get_src(dst, csr_ptr):
         src[csr_ptr[i] : csr_ptr[i+1]] = i 
 
     return src 
+
+def get_edge_index(g):
+    src = get_src(g.edge_index, g.csr_ptr)
+    return torch.stack([src,g.edge_index]).long()
+
 
 def update_ptr(src):
     '''
