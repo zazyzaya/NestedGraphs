@@ -34,10 +34,10 @@ def propagate_labels(g, day, label_f=HOME+'inputs/manual_labels.txt'):
 
     # Only consider direct parent-child relations for labeling
     dst = g.edge_index 
-    src = get_src(dst, g.csr_ptr)
+    src = get_src(dst, g.csr_ptr).to(dst.device)
 
     ei = torch.stack([src,dst], dim=0).long()
-    ei = ei[:, g.edge_attr[:,0]==0]
+    ei = ei[:, g.edge_attr[:,0]==1]
 
     while domain:
         mal = domain.pop()
@@ -135,6 +135,5 @@ def get_similar(x, feat_dim=3, path_dims=8, depth=1):
 
     truncated = x[:,:(feat_dim+path_dims*depth)]
     vals,idx = truncated.unique(dim=0,return_inverse=True)
-    n_classes = vals.size(0)
 
     return idx 

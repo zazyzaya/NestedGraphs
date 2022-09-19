@@ -6,12 +6,13 @@ import torch
 from tqdm import tqdm 
 
 from models.tgat import TGAT 
+from utils.graph_utils import propagate_labels
 
 strip_gid = lambda x : x.split('/')[-1].split('.')[0][5:]
 HOME = '/home/isaiah/code/NestedGraphs/'
-DEVICE = 3
+DEVICE = 1
 
-sd,args,kwargs = torch.load(HOME+'saved_models/tgat_clms1epoch.pkl')
+sd,args,kwargs = torch.load(HOME+'saved_models/tgat.pkl')
 kwargs['device'] = DEVICE
 model = TGAT(*args,**kwargs)
 model.load_state_dict(sd)
@@ -31,8 +32,8 @@ with torch.no_grad():
             g = pickle.load(f).to(DEVICE)
 
         procs = (g.x[:,0] == 1).nonzero().squeeze(-1)
-        zs = model(g, batch=procs)
-        torch.save(zs, 'inputs/Sept%d/benign/tgat_emb_%s%s.pkl' % (DAY,name,gid))
+        zs = model(g, batch=torch.arange(g.x.size(0)))
+        torch.save({'zs':zs,'proc_mask':procs}, 'inputs/Sept%d/benign/tgat_emb_%s%s.pkl' % (DAY,name,gid))
         del g, zs
 
     prog.close() 
@@ -47,8 +48,10 @@ with torch.no_grad():
             g = pickle.load(f).to(DEVICE)
         
         procs = (g.x[:,0] == 1).nonzero().squeeze(-1)
-        zs = model(g,batch=procs)
-        torch.save(zs, HOME+'inputs/Sept%d/mal/tgat_emb_%s%s.pkl' % (DAY,name,gid))
+        zs = model(g,batch=torch.arange(g.x.size(0)))
+        y = propagate_labels(g, DAY)[procs]
+
+        torch.save({'zs':zs, 'proc_mask':procs, 'y':y}, HOME+'inputs/Sept%d/mal/tgat_emb_%s%s.pkl' % (DAY,name,gid))
         del g, zs
 
     prog.close()

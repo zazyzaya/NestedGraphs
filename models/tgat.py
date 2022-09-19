@@ -147,7 +147,7 @@ class TGAT(nn.Module):
                 nn.Linear(hidden, hidden, device=device)
             )] * (layers)
         )
-        # No output activation in case BCELogits loss is used later
+        
         self.proj_out = nn.Linear(hidden, out, device=device)
 
         # Src nodes don't have an edge feature to pass into 
