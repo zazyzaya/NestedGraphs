@@ -173,14 +173,6 @@ def proc_job(rank, world_size, hp):
             # nids of nodes that represent processes (x_n = [1,0,0,...,0])
             procs = (g.x[:,0] == 1).nonzero().squeeze(-1)
             
-            '''
-            naive method
-            n_procs = procs.size(0)
-            procs_per_worker = math.ceil(n_procs / world_size)
-            my_batch = procs_per_worker*rank 
-            my_batch = torch.arange(my_batch, my_batch+procs_per_worker)
-            '''
-            
             costs = [
                 (min(g.get_one_hop(p.item())[0].size(0), hp.nsize), p.item())
                 for p in procs
