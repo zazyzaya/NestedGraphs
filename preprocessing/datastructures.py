@@ -342,6 +342,9 @@ class FullGraph(HostGraph):
         self.ntypes = []
 
     def add_node(self, ts, uuid, feat, ntype):
+        if uuid[:4] == 'None':
+            return False 
+
         if self.node_map.get(uuid, None) is None: 
             self.x.append(feat)
             self.node_times.append(ts)
@@ -354,11 +357,11 @@ class FullGraph(HostGraph):
         return False
         
     def add_edge(self, ts, src,dst, sfeat, dfeat, stype, dtype, rel):
-        if src[:2] == '-1' or dst[:2] == '-1':
-            return 
-
         self.add_node(ts, src, sfeat, stype)
         self.add_node(ts, dst, dfeat, dtype)
+        
+        if src[:4] == 'None' or dst[:4] == 'None':
+            return 
 
         src = self.node_map[src]
         dst = self.node_map[dst]

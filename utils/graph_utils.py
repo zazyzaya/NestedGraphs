@@ -125,3 +125,16 @@ def reindex(batch, ei):
         id_map[b] = i 
 
     
+def get_similar(x, feat_dim=3, path_dims=8, depth=1):
+    '''
+    Given matrix X where the first `feat_dim` columns are a 
+    one-hot repr of the node type (proc, file, reg), and the remaining
+    columns represent the path (path_dims per layer degrees), return
+    the classes of nodes present in the batch, and their indices
+    '''
+
+    truncated = x[:,:(feat_dim+path_dims*depth)]
+    vals,idx = truncated.unique(dim=0,return_inverse=True)
+    n_classes = vals.size(0)
+
+    return idx 
