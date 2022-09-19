@@ -15,10 +15,8 @@ from torch.optim import Adam
 from tqdm import tqdm 
 
 from models.tgat import TGAT 
+from train_single import cl_step, self_cl_step, mean_shifted_cl
 #from utils.graph_utils import get_src
-
-N_JOBS = 12 # How many worker processes will train the model
-P_THREADS = 1 # How many threads each worker gets
 
 '''
 Uniform batching
@@ -40,7 +38,9 @@ J,T,time
 16,1,46.36
 '''
 
+P_THREADS = 1
 DAY = 23 
+DEVICES = [2,3]
 
 # Depending on which machine we're running on 
 if socket.gethostname() == 'colonial0':
@@ -55,7 +55,7 @@ HOME = HOME + 'Sept%d/benign/' % DAY
 
 hp = HYPERPARAMS = SimpleNamespace(
     tsize=64, hidden=32, heads=8, 
-    emb_size=128, layers=3, nsize=64,
+    emb_size=128, layers=3, nsize=128,
     epochs=100, lr=0.005
 )
 
@@ -80,62 +80,11 @@ def fair_scheduler(n_workers, costs):
     return jobs
         
 
-
-def step(model, graph, batch, tau=0.05): 
-    '''
-    Uses self-contrastive learning with the dropout that's already there
-    to produce embeddings that are as self-similar as possible
-
-    https://arxiv.org/pdf/2104.08821.pdf
-
-              sim(x_i, x'_i)
-    L = ----------------------------
-         Sum(j=/=i) sim(x_i, x'_j)
-    '''
-
-    # Pass the same data through the net twice to get embeddings with
-    # different dropout masks 
-    a = model(graph, batch=batch)
-    b = model(graph, batch=batch)
-    
-    # Compute cosine sim manually 
-    a_norm = a / a.norm(dim=1)[:, None]
-    b_norm = b / b.norm(dim=1)[:, None]
-    
-    res = torch.mm(a_norm, b_norm.transpose(0,1))
-    res = torch.exp(res/tau)
-
-    # Self similarity (should be high) is diagonal
-    # Dissimilarity to other samples is what remains
-    pos = res.diagonal()
-    neg = (res.sum(dim=1)-pos)+1e-9
-
-    return (-torch.log(pos/neg)).mean()
-
-
-def _step(model, graph, batch, holdout=0.75):
-    '''
-    Uses dynamic link prediction as loss
-    '''
-    
-    max_ts = torch.quantile(graph.edge_ts, holdout)
-    z = model(graph, batch=batch, end_t=max_ts)
-
-    ei = torch.cat([get_src(graph.edge_index, graph.csr_ptr), graph.edge_index], dim=0).long()
-    future_edges = ei[:,graph.edge_ts > max_ts]
-
-    # Can only check embeddings of nodes that were in batch
-    known_src = (future_edges[0] == batch.unsqueeze(-1)).sum(dim=0)
-    known_dst = (future_edges[1] == batch.unsqueeze(-1)).sum(dim=0)
-    known_edges = future_edges[:, known_src.logical_and(known_dst)]
-
-
-
 def proc_job(rank, world_size, hp):
     # DDP info
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = '42069'
-    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+    dist.init_process_group("nccl", rank=rank, world_size=world_size)
 
     # Sets number of threads used by this worker
     torch.set_num_threads(P_THREADS)
@@ -147,14 +96,14 @@ def proc_job(rank, world_size, hp):
         g = pickle.load(f)
 
     tgat = TGAT(
-        g.x.size(1), g.edge_feat_dim+1, 
+        g.x.size(1), g.edge_feat_dim, 
         hp.tsize, hp.hidden, hp.emb_size, 
         hp.layers, hp.heads,
         neighborhood_size=hp.nsize,
-        device=rank
+        device=DEVICES[rank]
     )
 
-    tgat = DDP(tgat, device_ids=[rank])
+    tgat = DDP(tgat, device_ids=[DEVICES[rank]])
     opt = Adam(tgat.parameters(), lr=hp.lr)
     loss = torch.tensor([float('nan')])
     for e in range(hp.epochs):
@@ -167,19 +116,19 @@ def proc_job(rank, world_size, hp):
 
         for i,g_file in enumerate(graphs):
             with open(g_file,'rb') as f:
-                g = pickle.load(f).to(rank)
+                g = pickle.load(f).to(DEVICES[rank])
 
             # Get this processes batch of jobs. In this case, 
             # nids of nodes that represent processes (x_n = [1,0,0,...,0])
-            procs = (g.x[:,0] == 1).nonzero().squeeze(-1)
+            #procs = (g.x[:,0] == 1).nonzero().squeeze(-1)
             
             costs = [
-                (min(g.get_one_hop(p.item())[0].size(0), hp.nsize), p.item())
-                for p in procs
+                (min(g.get_one_hop(i)[0].size(0), hp.nsize), i)
+                for i in range(g.x.size(0))
             ]
             my_batch = torch.tensor(fair_scheduler(world_size, costs)[rank]).to(rank)
             opt.zero_grad()
-            loss = step(tgat, g, my_batch)
+            loss = mean_shifted_cl(tgat, g, my_batch)
             loss.backward()
             opt.step() 
             
@@ -210,8 +159,8 @@ def proc_job(rank, world_size, hp):
 def main(hp):
     world_size = 4
     mp.spawn(proc_job,
-        args=(world_size,hp),
-        nprocs=world_size,
+        args=(len(DEVICES),hp),
+        nprocs=len(DEVICES),
         join=True)
 
 if __name__ == '__main__':

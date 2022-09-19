@@ -15,7 +15,8 @@ from torch.optim import Adam
 from tqdm import tqdm 
 
 from models.tgat import TGAT
-from utils.perterbations import subgraph, drop_edge
+from utils.graph_utils import get_similar
+from loss_fns import contrastive_loss
 
 P_THREADS = 16 # How many threads each worker gets
 DEVICE = 3     # Which GPU (for now just use 1)
@@ -90,8 +91,42 @@ def self_cl_step(model, graph, batch, tau=0.05):
 
     return (-torch.log(pos/neg)).mean()
 
-def cl_step(model, g1, g2, p1=subgraph, p2=drop_edge):
-    pass
+def cl_step(model, g, batch):
+    labels = get_similar(g.x[batch], depth=2)
+    classes, n_classes = labels.unique(return_counts=True)
+
+    z = model(g, batch=batch)
+
+    losses = []
+    for i in range(classes.size(0)):
+        if n_classes[i] > 1: 
+            losses.append(contrastive_loss(
+                z[labels == classes[i]], 
+                z[labels != classes[i]]
+            ))
+
+    return torch.stack(losses).mean()
+
+def mean_shifted_cl(model, g, batch):
+    labels = get_similar(g.x[batch], depth=2)
+    classes, n_classes = labels.unique(return_counts=True)
+
+    z = model(g, batch=batch)
+    z_norm = z / z.norm(dim=1,keepdim=True)
+    c = z_norm.mean(dim=0)
+
+    theta_x = (z_norm-c) / (z_norm-c).norm(dim=1,keepdim=True)  
+    losses = []
+    for i in range(classes.size(0)):
+        if n_classes[i] > 1: 
+            losses.append(contrastive_loss(
+                theta_x[labels == classes[i]], 
+                theta_x[labels != classes[i]], 
+                assume_normed=True
+            ))
+
+    angular_loss = -z_norm * c
+    return torch.stack(losses).mean() + angular_loss.mean()
 
 def train(hp):
     # Sets number of threads used by this worker
@@ -103,7 +138,7 @@ def train(hp):
         g = pickle.load(f)
 
     tgat = TGAT(
-        g.x.size(1), g.edge_feat_dim+1, 
+        g.x.size(1), g.edge_feat_dim, 
         hp.tsize, hp.hidden, hp.emb_size, 
         hp.layers, hp.heads,
         neighborhood_size=hp.nsize,
@@ -129,7 +164,7 @@ def train(hp):
             # nids of nodes that represent processes (x_n = [1,0,0,...,0])
             procs = (g.x[:,0] == 1).nonzero().squeeze(-1)
             opt.zero_grad()
-            loss = self_cl_step(tgat, g, procs)
+            loss = cl_step(tgat, g, procs)
             loss.backward()
             opt.step() 
             

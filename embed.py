@@ -9,12 +9,15 @@ from models.tgat import TGAT
 
 strip_gid = lambda x : x.split('/')[-1].split('.')[0][5:]
 HOME = '/home/isaiah/code/NestedGraphs/'
-DEVICE = 0
+DEVICE = 3
 
-sd,args,kwargs = torch.load(HOME+'saved_models/tgat.pkl')
-model = TGAT(*args,**kwargs).to(DEVICE)
+sd,args,kwargs = torch.load(HOME+'saved_models/tgat_clms1epoch.pkl')
+kwargs['device'] = DEVICE
+model = TGAT(*args,**kwargs)
 model.load_state_dict(sd)
 model.eval()
+
+name = 'clms'
 
 DAY = 23# int(sys.argv[1])
 with torch.no_grad():
@@ -29,11 +32,10 @@ with torch.no_grad():
 
         procs = (g.x[:,0] == 1).nonzero().squeeze(-1)
         zs = model(g, batch=procs)
-        torch.save(zs, 'inputs/Sept%d/benign/tgat_emb%s.pkl' % (DAY,gid))
+        torch.save(zs, 'inputs/Sept%d/benign/tgat_emb_%s%s.pkl' % (DAY,name,gid))
         del g, zs
 
     prog.close() 
-    
 
     print("Embedding malicious hosts")
     prog = tqdm(glob.glob(HOME+'inputs/Sept%d/mal/full_graph*.pkl' % DAY))
@@ -46,7 +48,7 @@ with torch.no_grad():
         
         procs = (g.x[:,0] == 1).nonzero().squeeze(-1)
         zs = model(g,batch=procs)
-        torch.save(zs, HOME+'inputs/Sept%d/mal/tgat_emb%s.pkl' % (DAY,gid))
+        torch.save(zs, HOME+'inputs/Sept%d/mal/tgat_emb_%s%s.pkl' % (DAY,name,gid))
         del g, zs
 
     prog.close()
