@@ -6,11 +6,13 @@ import socket
 from types import SimpleNamespace
 from xml.etree.ElementInclude import include
 
+import matplotlib.pyplot as plt
 from sklearn.metrics import roc_auc_score as auc_score, average_precision_score as ap_score, \
-    recall_score, precision_score, f1_score, accuracy_score
+    recall_score, precision_score, f1_score, accuracy_score, RocCurveDisplay
 
 import torch 
 from torch import nn 
+import torch.nn.functional as F
 import torch.distributed as dist
 import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -34,8 +36,8 @@ elif socket.gethostname() == 'orion.ece.seas.gwu.edu':
 HOME = HOME + 'Sept%d/benign/' % DAY 
 
 hp = HYPERPARAMS = SimpleNamespace(
-    hidden=512, layers=2,
-    epochs=100, lr=0.005
+    hidden=512, layers=3,
+    epochs=50, lr=0.0001
 )
 
 class SimpleDetector(nn.Module):
@@ -46,10 +48,12 @@ class SimpleDetector(nn.Module):
 
         self.net = nn.Sequential(
             nn.Linear(in_feats*2, hidden, device=device), 
+            nn.Dropout(),
             nn.ReLU(), 
             *[
                 nn.Sequential(
                     nn.Linear(hidden, hidden, device=device), 
+                    nn.Dropout(),
                     nn.ReLU()
                 )
                 for _ in range(layers-2)
@@ -101,9 +105,6 @@ def train(rank, world_size, hp):
     )
 
     opt = Adam(model.parameters(), lr=hp.lr)
-
-    #test(model)
-    
     for e in range(hp.epochs):
         random.shuffle(graphs)
 
@@ -114,7 +115,7 @@ def train(rank, world_size, hp):
             embs = torch.load(
                 g_file.replace('full_', 'tgat_emb_clms')
             )
-            zs = embs['zs'].to(DEVICE) 
+            zs = embs['zs'].to(DEVICE)
             procs=embs['proc_mask'].to(DEVICE)
 
             # Get this processes batch of jobs. In this case, 
@@ -122,6 +123,7 @@ def train(rank, world_size, hp):
             bs = procs.size(0) // world_size
             my_batch = procs[bs*rank : bs*(rank+1)]
 
+            model.train()
             opt.zero_grad()
             loss = step(model, g, zs, my_batch)
             loss.backward()
@@ -142,12 +144,8 @@ def train(rank, world_size, hp):
             # Try to save some memory 
             #del g,zs,my_batch
         
-        test(model)
-
-    # Clean up 
-    dist.barrier()
-    if rank == 0:
-        dist.destroy_process_group() 
+        if e%5 == 4:
+            test(model)
 
 
 @torch.no_grad()
@@ -176,6 +174,7 @@ def test_one(model, g, zs, procs):
     return results
 
 def test(model, thresh=None):
+    model.eval()
     preds = []; ys = []
     graphs = glob.glob(HOME.replace('benign', 'mal')+'full_graph*')
 
@@ -214,6 +213,8 @@ def test(model, thresh=None):
     for k,v in stats.items():
         print(k,v)
 
+    RocCurveDisplay.from_predictions(ys, y_hat)
+    plt.savefig('roc_curve.png')
     return stats 
 
 def main(hp):

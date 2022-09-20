@@ -108,12 +108,12 @@ def cl_step(model, g, batch):
     return torch.stack(losses).mean()
 
 def mean_shifted_cl(model, g, batch):
-    labels = get_similar(g.x[batch], depth=2)
+    labels = get_similar(g.x[batch], depth=3)
     classes, n_classes = labels.unique(return_counts=True)
 
     z = model(g, batch=batch)
     z_norm = z / z.norm(dim=1,keepdim=True)
-    c = z_norm.mean(dim=0)
+    c = z.pow(2).sum(dim=0).pow(0.5)
 
     theta_x = (z_norm-c) / (z_norm-c).norm(dim=1,keepdim=True)  
     losses = []
@@ -126,6 +126,7 @@ def mean_shifted_cl(model, g, batch):
             ))
 
     angular_loss = -z_norm * c
+
     return torch.stack(losses).mean() + angular_loss.mean()
 
 def train(hp):

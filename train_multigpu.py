@@ -56,7 +56,7 @@ HOME = HOME + 'Sept%d/benign/' % DAY
 hp = HYPERPARAMS = SimpleNamespace(
     tsize=64, hidden=32, heads=8, 
     emb_size=128, layers=3, nsize=128,
-    epochs=100, lr=0.005
+    epochs=100, lr=0.0001
 )
 
 def fair_scheduler(n_workers, costs):
@@ -120,11 +120,11 @@ def proc_job(rank, world_size, hp):
 
             # Get this processes batch of jobs. In this case, 
             # nids of nodes that represent processes (x_n = [1,0,0,...,0])
-            #procs = (g.x[:,0] == 1).nonzero().squeeze(-1)
+            procs = (g.x[:,0] == 1).nonzero().squeeze(-1)
             
             costs = [
-                (min(g.get_one_hop(i)[0].size(0), hp.nsize), i)
-                for i in range(g.x.size(0))
+                (min(g.get_one_hop(p.item())[0].size(0), hp.nsize), p)
+                for p in procs
             ]
             my_batch = torch.tensor(fair_scheduler(world_size, costs)[rank]).to(rank)
             opt.zero_grad()
@@ -135,6 +135,9 @@ def proc_job(rank, world_size, hp):
             if rank==0:
                 prog.desc = '[%d-%d] Loss: %0.4f' % (e,i+1,loss.item())
                 prog.update()
+
+                with open('log.txt', 'a') as f:
+                    f.write('%f\n' % loss.item())
 
                 torch.save(
                     (
@@ -157,7 +160,9 @@ def proc_job(rank, world_size, hp):
 
 
 def main(hp):
-    world_size = 4
+    with open('log.txt', 'w+'):
+        pass 
+
     mp.spawn(proc_job,
         args=(len(DEVICES),hp),
         nprocs=len(DEVICES),

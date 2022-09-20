@@ -148,7 +148,10 @@ class TGAT(nn.Module):
             )] * (layers)
         )
         
-        self.proj_out = nn.Linear(hidden, out, device=device)
+        self.proj_out = nn.Sequential(
+            nn.Linear(hidden, out, device=device),
+            nn.Tanh()
+        )
 
         # Src nodes don't have an edge feature to pass into 
         # the attention mech. May as well use the free space with

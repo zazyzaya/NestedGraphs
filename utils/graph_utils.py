@@ -79,7 +79,7 @@ def get_src(dst, csr_ptr):
     '''
     Given csr representation of edges, return non-sparse source vector
     '''
-    src = torch.zeros(dst.size())
+    src = torch.zeros(dst.size(), device=dst.device)
 
     for i in range(len(csr_ptr)-1):
         src[csr_ptr[i] : csr_ptr[i+1]] = i 
