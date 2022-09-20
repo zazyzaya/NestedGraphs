@@ -371,7 +371,7 @@ class FullGraph(HostGraph):
         d_neigh[0].append(src_id)
         d_neigh[1].append(ts)
         d_neigh[2].append(rel)
-        self.one_hop[dst] = d_neigh
+        self.one_hop[dst_id] = d_neigh
 
         if bidirectional:
             self.add_edge(
