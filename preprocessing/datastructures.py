@@ -356,23 +356,28 @@ class FullGraph(HostGraph):
             return True 
         return False
         
-    def add_edge(self, ts, src,dst, sfeat, dfeat, stype, dtype, rel):
+    def add_edge(self, ts, src,dst, sfeat, dfeat, stype, dtype, rel, bidirectional=False):
         self.add_node(ts, src, sfeat, stype)
         self.add_node(ts, dst, dfeat, dtype)
         
         if src[:4] == 'None' or dst[:4] == 'None':
             return 
 
-        src = self.node_map[src]
-        dst = self.node_map[dst]
+        src_id = self.node_map[src]
+        dst_id = self.node_map[dst]
 
         # Add src node to dst 1-hop neighborhood (no longer bother with ei lists from before--superflous)
-        d_neigh = self.one_hop.get(dst, [[],[],[]])
-        d_neigh[0].append(src)
+        d_neigh = self.one_hop.get(dst_id, [[],[],[]])
+        d_neigh[0].append(src_id)
         d_neigh[1].append(ts)
         d_neigh[2].append(rel)
         self.one_hop[dst] = d_neigh
 
+        if bidirectional:
+            self.add_edge(
+                ts, dst, src, dfeat, sfeat, 
+                dtype, stype, rel, bidirectional=False
+            )
 
     def update_uuid(self, old, new):
         '''

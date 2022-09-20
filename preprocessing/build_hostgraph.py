@@ -1,4 +1,5 @@
-import sys 
+import sys
+from unicodedata import bidirectional 
 
 from dateutil.parser import isoparse
 from joblib import Parallel, delayed
@@ -33,7 +34,9 @@ EDGES = {
 }
 
 # Converts from ISO timestamp to UTC time since epoch
-fmt_ts = lambda x : isoparse(x).timestamp()
+# Also, make the number a bit smaller; torch really hates saving
+# all those sig figs later
+fmt_ts = lambda x : isoparse(x).timestamp() - 1569000000
 fmt_p = lambda pid,proc : pid.strip() + ':' + proc.strip().upper().split('\\\\')[-1].replace("'",'')
 
 def parse_line_full(graph: FullGraph, line: str) -> None:
@@ -77,25 +80,16 @@ def parse_line_full(graph: FullGraph, line: str) -> None:
             )
             return 
 
-        if act != 'READ':
-            graph.add_edge(
-                ts, fmt_p(pid,p_img), path,
-                path_to_tensor(p_img, DEPTH),
-                path_to_tensor(path, DEPTH),
-                graph.NODE_TYPES['PROCESS'],
-                graph.NODE_TYPES[obj],
-                EDGES[obj][act]
-            )
-        # Otherwise, edge direction is F <- P
-        else: 
-            graph.add_edge(
-                ts, path, fmt_p(pid,p_img),
-                path_to_tensor(path, DEPTH),
-                path_to_tensor(p_img, DEPTH),
-                graph.NODE_TYPES[obj],
-                graph.NODE_TYPES['PROCESS'],
-                EDGES[obj][act]
-            )
+        graph.add_edge(
+            ts, fmt_p(pid,p_img), path,
+            path_to_tensor(p_img, DEPTH),
+            path_to_tensor(path, DEPTH),
+            graph.NODE_TYPES['PROCESS'],
+            graph.NODE_TYPES[obj],
+            EDGES[obj][act],
+            bidirectional=True
+        )
+    
 
     elif obj == 'REGISTRY': 
         pid, ppid, key, _, p_img = feats[:5]
@@ -105,12 +99,13 @@ def parse_line_full(graph: FullGraph, line: str) -> None:
             path_to_tensor(key, DEPTH), 
             graph.NODE_TYPES['PROCESS'],
             graph.NODE_TYPES[obj],
-            EDGES[obj][act]
+            EDGES[obj][act],
+            bidirectional=True
         )
 
-def build_full_graph(host: int, day: int):
+def build_full_graph(i: int, tot: int, host: int, day: int):
     g = FullGraph(host)
-    prog = tqdm(desc='Lines parsed')
+    prog = tqdm(desc='Lines parsed (%d/%d)' % (i+1,tot))
     
     with open(SOURCE+'Sept%d/sysclient%04d.csv' % (day,host)) as f:
         line = f.readline()
@@ -131,5 +126,5 @@ def build_full_graphs(hosts, day, jobs=JOBS):
     Given a sequence of hosts, build graphs for them in parallel
     '''
     return Parallel(n_jobs=min(jobs, len(hosts)), prefer='processes')(
-        delayed(build_full_graph)(i, tot, h, day) for i,h in enumerate(hosts)
+        delayed(build_full_graph)(i, len(hosts), h, day) for i,h in enumerate(hosts)
     )
