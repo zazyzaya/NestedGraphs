@@ -112,10 +112,12 @@ def mean_shifted_cl(model, g, batch):
     classes, n_classes = labels.unique(return_counts=True)
 
     z = model(g, batch=batch)
-    z_norm = z / z.norm(dim=1,keepdim=True)
-    c = z.pow(2).sum(dim=0).pow(0.5)
+    z_norm = z / z.pow(2).sum(dim=1, keepdim=True).pow(0.5)
+    
+    c = z.mean(dim=0, keepdim=True)
+    c = c / c.pow(2).sum(dim=1, keepdim=True).pow(0.5)
 
-    theta_x = (z_norm-c) / (z_norm-c).norm(dim=1,keepdim=True)  
+    theta_x = (z_norm-c) / (z_norm-c).pow(2).sum(dim=1, keepdim=True).pow(0.5)
     losses = []
     for i in range(classes.size(0)):
         if n_classes[i] > 1: 
