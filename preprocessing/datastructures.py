@@ -436,6 +436,7 @@ class FullGraph(HostGraph):
         self.edge_index = torch.cat(ei, dim=0)
         self.edge_attr = torch.cat(rels, dim=0)
         self.edge_ts = torch.cat(ts, dim=0)
+        self.csr_ptr = torch.tensor(self.csr_ptr)
 
         self.edge_feat_dim = rels_max+1
 

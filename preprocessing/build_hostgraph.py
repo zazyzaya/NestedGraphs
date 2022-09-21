@@ -56,7 +56,7 @@ def parse_line_full(graph: FullGraph, line: str) -> None:
         return 
 
     if obj == 'PROCESS':
-        if act != 'CREATE':
+        if act not in ['CREATE', 'OPEN']:
             return 
 
         # When processes are 'OPENED' their 'parent' is the
