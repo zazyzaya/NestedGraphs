@@ -143,9 +143,8 @@ def train(rank, world_size, hp):
 
             # Try to save some memory 
             #del g,zs,my_batch
-        
-        if e%5 == 4:
-            test(model)
+            
+        test(model)
 
 
 @torch.no_grad()
@@ -194,7 +193,7 @@ def test(model, thresh=None):
 
     # Higher preds -> more anomalous now
     preds = 1-torch.sigmoid(torch.cat(preds)).to('cpu')
-    ys = torch.cat(ys).clamp(0,1).to('cpu')
+    ys = torch.cat(ys).to('cpu')
 
     if thresh is None:
         thresh = preds.quantile(0.99)
@@ -202,6 +201,8 @@ def test(model, thresh=None):
     y_hat = torch.zeros(preds.size())
     y_hat[preds > thresh] = 1 
 
+    preds = preds.clamp(0,1)
+    
     stats = dict() 
     stats['Pr'] = precision_score(ys, y_hat)
     stats['Re'] = recall_score(ys, y_hat)
