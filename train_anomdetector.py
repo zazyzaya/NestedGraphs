@@ -4,7 +4,6 @@ import pickle
 import random
 import socket 
 from types import SimpleNamespace
-from xml.etree.ElementInclude import include
 
 import matplotlib.pyplot as plt
 from sklearn.metrics import roc_auc_score as auc_score, average_precision_score as ap_score, \
@@ -18,7 +17,7 @@ import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import Adam
 
-from utils.graph_utils import propagate_labels
+from models.detector import SimpleDetector
 
 P_THREADS = 1
 DAY = 23 
@@ -37,34 +36,8 @@ HOME = HOME + 'Sept%d/benign/' % DAY
 
 hp = HYPERPARAMS = SimpleNamespace(
     hidden=512, layers=3,
-    epochs=50, lr=0.0001
+    epochs=50, lr=0.001
 )
-
-class SimpleDetector(nn.Module):
-    def __init__(self, in_feats, hidden, layers, device=torch.device('cpu')):
-        super().__init__()
-        self.args = (in_feats, hidden, layers)
-        self.kwargs = dict(device=device)
-
-        self.net = nn.Sequential(
-            nn.Linear(in_feats*2, hidden, device=device), 
-            nn.Dropout(),
-            nn.ReLU(), 
-            *[
-                nn.Sequential(
-                    nn.Linear(hidden, hidden, device=device), 
-                    nn.Dropout(),
-                    nn.ReLU()
-                )
-                for _ in range(layers-2)
-            ],
-            nn.Linear(hidden, 1, device=device)
-        )
-
-    def forward(self, src, dst):
-        x = torch.cat([src,dst],dim=1)
-        return self.net(x)
-
 
 bce = nn.BCEWithLogitsLoss()
 def step(model, graph, zs, batch): 
@@ -90,16 +63,18 @@ def step(model, graph, zs, batch):
     p_labels = torch.full(pos.size(), 1., device=src.device)
     n_labels = torch.full(neg.size(), 0., device=src.device)
 
-    return bce.forward(
+    return bce(
         torch.cat([pos, neg], dim=0),
         torch.cat([p_labels, n_labels], dim=0)
-    )
+    ), pos.min()
 
 
 def train(rank, world_size, hp):
     torch.set_num_threads(P_THREADS)
     graphs = glob.glob(HOME+'full_graph*')
+    random.shuffle(graphs)
 
+    val_graphs = [graphs.pop() for _ in range(5)]
     model = SimpleDetector(
         128, hp.hidden, hp.layers, device=DEVICE
     )
@@ -125,7 +100,7 @@ def train(rank, world_size, hp):
 
             model.train()
             opt.zero_grad()
-            loss = step(model, g, zs, my_batch)
+            loss, thresh = step(model, g, zs, my_batch)
             loss.backward()
             opt.step() 
             
@@ -140,40 +115,38 @@ def train(rank, world_size, hp):
                     ), 'saved_models/anom.pkl'
                 )
                 '''
+        
+        thresh = float('inf')
+        with torch.no_grad():
+            model.eval()
+            for g_file in val_graphs:
+                with open(g_file,'rb') as f:
+                    g = pickle.load(f).to(DEVICE)
+                
+                embs = torch.load(
+                    g_file.replace('full_', 'tgat_emb_clms')
+                )
+                zs = embs['zs'].to(DEVICE)
+                procs=embs['proc_mask'].to(DEVICE)
 
-            # Try to save some memory 
-            #del g,zs,my_batch
-            
-        test(model)
+                preds = model.predict(g, zs, procs)
+                thresh = min(thresh, preds.min())
+
+        test_per_cc(model, thresh=thresh)
 
 
 @torch.no_grad()
-def test_one(model, g, zs, procs):
-    results = torch.zeros((procs.size(0),1), device=zs.device)
+def test_one_per_cc(model, g, zs, procs, ccs):
+    results = model.predict(g, zs, procs)
+    
+    # Take the average(?) score of the connected component
+    cc_results = torch.zeros((len(ccs), 1), device=zs.device)
+    for i in range(len(ccs)):
+        cc_results[i] = results[ccs[i]].min()
 
-    src,dst = [],[]
-    idx_map = []; i=0
-    for nid in procs:
-        st = g.csr_ptr[nid.item()]
-        en = g.csr_ptr[nid.item()+1]
+    return cc_results
 
-        dst.append(g.edge_index[st:en])
-        src.append(nid.repeat(en-st))
-        idx_map.append(torch.tensor(i, device=zs.device).repeat(en-st))
-        i += 1
-
-    src = torch.cat(src).long()
-    dst = torch.cat(dst).long()
-    idx = torch.cat(idx_map).long()
-    preds = model(zs[src],zs[dst])
-
-    # Get the neighbor with maximum suspicion to use as the 
-    # score for this node
-    results=results.index_reduce_(0, idx, preds, 'amin', include_self=False)
-    return results
-
-def test(model, thresh=None):
-    model.eval()
+def test_per_cc(model, thresh=None):
     preds = []; ys = []
     graphs = glob.glob(HOME.replace('benign', 'mal')+'full_graph*')
 
@@ -187,9 +160,11 @@ def test(model, thresh=None):
         
         zs = embs['zs'].to(DEVICE)
         procs = embs['proc_mask'].to(DEVICE)
-        ys.append(embs['y'].to('cpu'))
+        node_ys = embs['y']
+        ccs = embs['ccs']
 
-        preds.append(test_one(model, g, zs, procs))
+        ys.append(torch.stack([node_ys[cc].max() for cc in ccs]))
+        preds.append(test_one_per_cc(model, g, zs, procs, ccs))
 
     # Higher preds -> more anomalous now
     preds = 1-torch.sigmoid(torch.cat(preds)).to('cpu')
@@ -197,11 +172,13 @@ def test(model, thresh=None):
 
     if thresh is None:
         thresh = preds.quantile(0.99)
+    else:
+        thresh = 1-torch.sigmoid(thresh).cpu()
 
     y_hat = torch.zeros(preds.size())
     y_hat[preds > thresh] = 1 
 
-    preds = preds.clamp(0,1)
+    ys = ys.clamp(0,1)
     
     stats = dict() 
     stats['Pr'] = precision_score(ys, y_hat)
@@ -211,12 +188,15 @@ def test(model, thresh=None):
     stats['AUC'] = auc_score(ys, preds)
     stats['AP'] = ap_score(ys, preds)
 
+    print("%d samples; %d anomalies" % (ys.size(0), ys.sum().item()))
     for k,v in stats.items():
         print(k,v)
 
-    RocCurveDisplay.from_predictions(ys, y_hat)
+    RocCurveDisplay.from_predictions(ys, preds)
     plt.savefig('roc_curve.png')
     return stats 
+
+
 
 def main(hp):
     train(0,1,hp)

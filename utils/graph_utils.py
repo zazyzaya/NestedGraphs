@@ -1,3 +1,4 @@
+from collections import defaultdict
 import json 
 import socket 
 
@@ -50,6 +51,41 @@ def propagate_labels(g, day, label_f=HOME+'inputs/manual_labels.txt'):
 
     #labels[labels != 0] = 1/labels[labels!=0]
     return labels
+
+def connected_components(g):
+    '''
+    Find connected components in the process tree only
+    '''
+    parent = torch.arange(g.x.size(0))
+    ei = get_edge_index(g)
+
+    # Filter out IPC (way too many)
+    ei = ei[:, g.edge_attr[:,0]==1]
+
+    def find(x):
+        if x != parent[x]:
+            parent[x] = find(parent[x])
+        return parent[x]
+
+    def union(x,y):
+        parent_x = find(x)
+        parent_y = find(y)
+
+        if parent_x != parent_y:
+            parent[parent_y] = parent_x
+
+    for src,dst in ei.T: 
+        union(src,dst)
+
+    cc = defaultdict(list)
+    proc_ids = torch.arange(g.x.size(0))[g.x[:,0]==1]
+    
+    # Query with original index, but log the 
+    # process-only index
+    for i,pid in enumerate(proc_ids):
+        cc[find(pid).item()].append(i)
+
+    return [torch.tensor(v) for v in cc.values()]
 
 
 def compress_ei(g):
