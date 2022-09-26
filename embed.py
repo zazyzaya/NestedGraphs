@@ -6,7 +6,7 @@ import torch
 from tqdm import tqdm 
 
 from models.tgat import TGAT 
-from utils.graph_utils import propagate_labels
+from utils.graph_utils import propagate_labels, connected_components
 
 strip_gid = lambda x : x.split('/')[-1].split('.')[0][5:]
 HOME = '/home/isaiah/code/NestedGraphs/'
@@ -50,8 +50,9 @@ with torch.no_grad():
         procs = (g.x[:,0] == 1).nonzero().squeeze(-1)
         zs = model(g,batch=torch.arange(g.x.size(0)))
         y = propagate_labels(g, DAY)[procs]
+        ccs = connected_components(g)
 
-        torch.save({'zs':zs, 'proc_mask':procs, 'y':y}, HOME+'inputs/Sept%d/mal/tgat_emb_%s%s.pkl' % (DAY,name,gid))
+        torch.save({'zs':zs, 'proc_mask':procs, 'y':y, 'ccs': ccs}, HOME+'inputs/Sept%d/mal/tgat_emb_%s%s.pkl' % (DAY,name,gid))
         del g, zs
 
     prog.close()

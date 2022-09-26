@@ -1,2 +1,0 @@
-Last AUC	Last AP	Last Pr	Last Re	Best Epoch	Best AUC	Best AP	Best Pr	Best Re
-gen_latent: 8.000000

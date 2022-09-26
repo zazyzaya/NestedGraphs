@@ -126,7 +126,7 @@ def proc_job(rank, world_size, hp):
                 (min(g.get_one_hop(p.item())[0].size(0), hp.nsize), p)
                 for p in procs
             ]
-            my_batch = torch.tensor(fair_scheduler(world_size, costs)[rank]).to(rank).long()
+            my_batch = torch.tensor(fair_scheduler(world_size, costs)[rank]).to(DEVICES[rank]).long()
             opt.zero_grad()
             loss = mean_shifted_cl(tgat, g, my_batch)
             loss.backward()
