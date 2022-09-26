@@ -3,8 +3,9 @@ import pickle
 import random 
 from types import SimpleNamespace
 
+import matplotlib.pyplot as plt
 from sklearn.metrics import roc_auc_score as auc_score, average_precision_score as ap_score, \
-    recall_score, precision_score, f1_score, accuracy_score
+    recall_score, precision_score, f1_score, accuracy_score, RocCurveDisplay
 import torch 
 import torch.nn.functional as F
 from torch import nn 
@@ -14,7 +15,7 @@ from torch_geometric.nn import GCNConv
 from train_multigpu import HOME
 from utils.graph_utils import get_edge_index
 
-ALPHA = 0.8
+ALPHA = 0.5
 BETA = 15
 GAMMA = 0.1
 
@@ -90,7 +91,7 @@ def disc_step(disc, gen, graph, embs, procs):
     
     real = disc(embs, ei)[procs]
     fake = disc(
-        gen(graph.x, ei), ei 
+        gen(embs, ei), ei 
     )[procs]
 
     return (-torch.log(real+1e-9) - GAMMA * torch.log(1-fake+1e-9)).mean()
@@ -98,7 +99,7 @@ def disc_step(disc, gen, graph, embs, procs):
 def gen_step(disc, gen, graph, embs, procs):
     ei = get_edge_index(graph)
 
-    fake = gen(graph.x, ei)
+    fake = gen(embs, ei)
     mu = fake.mean(dim=0)
 
     disp_loss = BETA * (1 / ((fake-mu).pow(2)).mean())
@@ -119,7 +120,7 @@ def train(hp):
     d_opt = Adam(disc.parameters(), lr=hp.d_lr)
 
     gen = GenGCN(
-        g.x.size(1), hp.latent, hp.hidden, 128,
+        128, hp.latent, hp.hidden, 128,
         hp.layers, device=DEVICE
     )
     g_opt = Adam(gen.parameters(), lr=hp.g_lr)
@@ -154,7 +155,7 @@ def train(hp):
             gen.requires_grad = True 
             disc.requires_grad = False 
 
-            g_loss = gen_step(disc, gen, g, embs, procs)
+            g_loss = gen_step(disc, gen, g, zs, procs)
             g_loss.backward() 
             g_opt.step() 
 
@@ -178,6 +179,17 @@ def train(hp):
         test(disc)
 
 @torch.no_grad()
+def test_one_per_cc(model, g, zs, procs, ccs):
+    results = model(zs, get_edge_index(g))[procs]
+    
+    # Take the average(?) score of the connected component
+    cc_results = torch.zeros((len(ccs), 1), device=zs.device)
+    for i in range(len(ccs)):
+        cc_results[i] = results[ccs[i]].max()
+
+    return cc_results
+
+@torch.no_grad()
 def test(model, thresh=None):
     model.eval()
     preds = []; ys = []
@@ -193,19 +205,26 @@ def test(model, thresh=None):
         
         zs = embs['zs'].to(DEVICE)
         procs = embs['proc_mask'].to(DEVICE)
-        ys.append(embs['y'].to('cpu'))
-        preds.append(model(zs, get_edge_index(g))[procs])
+        node_ys = embs['y']
+        ccs = embs['ccs']
+
+        ys.append(torch.stack([node_ys[cc].max() for cc in ccs]))
+        preds.append(test_one_per_cc(model, g, zs, procs, ccs))
 
     # Higher preds -> more anomalous now
-    preds = 1-torch.sigmoid(torch.cat(preds)).to('cpu')
-    ys = torch.cat(ys).clamp(0,1).to('cpu')
+    preds = torch.sigmoid(torch.cat(preds)).to('cpu')
+    ys = torch.cat(ys).to('cpu')
 
     if thresh is None:
         thresh = preds.quantile(0.99)
+    else:
+        thresh = torch.sigmoid(thresh).cpu()
 
     y_hat = torch.zeros(preds.size())
     y_hat[preds > thresh] = 1 
 
+    ys = ys.clamp(0,1)
+    
     stats = dict() 
     stats['Pr'] = precision_score(ys, y_hat)
     stats['Re'] = recall_score(ys, y_hat)
@@ -214,9 +233,12 @@ def test(model, thresh=None):
     stats['AUC'] = auc_score(ys, preds)
     stats['AP'] = ap_score(ys, preds)
 
+    print("%d samples; %d anomalies" % (ys.size(0), ys.sum().item()))
     for k,v in stats.items():
         print(k,v)
 
+    RocCurveDisplay.from_predictions(ys, preds)
+    plt.savefig('roc_curve.png')
     return stats 
 
 if __name__ == '__main__':

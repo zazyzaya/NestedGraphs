@@ -1,5 +1,6 @@
 import torch 
 from torch import nn 
+from torch_geometric.nn import GCNConv
 
 class SimpleDetector(nn.Module):
     def __init__(self, in_feats, hidden, layers, device=torch.device('cpu')):
@@ -49,3 +50,40 @@ class SimpleDetector(nn.Module):
         # Get the neighbor with maximum suspicion to use as the 
         # score for this node
         return results.index_reduce_(0, idx, preds, 'amin', include_self=False)
+
+
+class GCNDetector(nn.Module):
+    def __init__(self, in_dim, hidden, out, layers, device=torch.device('cpu')):
+        super().__init__()
+        self.args = (in_dim, hidden, layers)
+        self.kwargs = dict(device=device)
+        
+        self.drop = nn.Dropout()
+        self.nets = nn.ModuleList(
+            [GCNConv(in_dim, hidden)] + 
+            [GCNConv(hidden, hidden) for _ in range(layers-2)] +
+            [GCNConv(hidden, out)]
+        )
+
+        # God damn it, PyG. Fix your API. 
+        # Why can't I initialize these in the GPU?
+        self.nets.to(device)
+
+    def forward(self, x, ei):
+        for net in self.nets[:-1]:
+            x = self.drop(torch.relu(net(x, ei)))
+
+        return self.nets[-1](x,ei)
+
+    def predict(self, g, ei, xs, procs):
+        zs = self.forward(xs, ei)
+
+        preds = []
+        for p in procs.nonzero().squeeze(-1):
+            src = zs[p]
+            dst = zs[g.get_one_hop(p)[0]]
+
+            edge_likelihoods = src @ dst.T 
+            preds.append(edge_likelihoods.min())
+
+        return torch.stack(preds)

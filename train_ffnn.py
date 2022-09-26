@@ -74,7 +74,7 @@ def train(rank, world_size, hp):
     graphs = glob.glob(HOME+'full_graph*')
     random.shuffle(graphs)
 
-    val_graphs = [graphs.pop() for _ in range(5)]
+    val_graphs = [graphs.pop() for _ in range(1)]
     model = SimpleDetector(
         128, hp.hidden, hp.layers, device=DEVICE
     )
