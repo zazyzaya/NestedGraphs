@@ -1,11 +1,13 @@
 import glob
 import os 
 import socket 
+import pickle
 
 # Because sklearn can't be trusted with this for some reason
 # this has to be done before they're imported
 os.environ['MKL_NUM_THREADS'] = '1'
 
+import numpy as np
 import torch
 from sklearn.model_selection import KFold
 from sklearn.neighbors import LocalOutlierFactor as LOF 
@@ -30,7 +32,7 @@ def get_tr(day=23):
     embs = glob.glob(HOME+'Sept%d/benign/tgat_emb_clms*' % day)
     zs = []
     for e in embs:
-        data = torch.load(e)
+        data = torch.load(e, map_location=torch.device('cpu'))
         zs.append(data['zs'][data['proc_mask']])
 
     return torch.cat(zs,dim=0).cpu()
@@ -40,7 +42,7 @@ def get_te(day=23):
     zs,y = [],[]
 
     for e in embs: 
-        data = torch.load(e)
+        data = torch.load(e, map_location=torch.device('cpu'))
         zs.append(data['zs'][data['proc_mask']])
         y.append(data['y'])
 
@@ -124,23 +126,18 @@ def test_ocsvm(params, day=23):
     stats = get_stats() 
     print("Fitting",tr.size(0),'samples')
     svm.fit(tr)
+    thresh = -svm.score_samples(tr).max()
 
     # Need to flip and convert to (0,1)
     # by default -1 means outlier, 1 is inlier
     te,y = get_te(day)
-    y_hat = -svm.predict(te)
-    y_hat[y_hat==-1] = 0
-
-    # Smaller numbers correlate to greater chance of outlier
-    # for now, just using inverse
-    preds = 1/(svm.score_samples(te)+1e-9)
-    add_stats(stats, preds, y_hat, y)
-    return pd.DataFrame(stats)
+    return np.append(-svm.score_samples(te), thresh)
 
 
 if __name__ == '__main__':
     params = dict()
 
+    '''
     contaminate = [1e-7,1e-5,1e-4,1e-3]
     for c in contaminate:
         params['n_neighbors'] = 50
@@ -152,8 +149,8 @@ if __name__ == '__main__':
             stats.to_csv(out_f, sep='\t')
             stats.mean().to_csv(out_f, sep='\t')
             stats.sem().to_csv(out_f, sep='\t')
-
     '''
+
     # Takes forever; run overnight.
     out_f  = open(HOME+'../results/oc-svm.txt', 'w+')
     out_f.close() 
@@ -167,11 +164,7 @@ if __name__ == '__main__':
             params['coef0'] = c
             params['degree'] = d
 
-            stats = test_ocsvm(params)
-            print(stats)
-            with open(HOME+'../results/lof.txt', 'a') as out_f:
-                out_f.write('\n\ncoef0:%f, Degree:%d\n' % (c,d))
-                stats.to_csv(out_f, sep='\t')
-                stats.mean().to_csv(out_f, sep='\t')
-                stats.sem().to_csv(out_f, sep='\t')
-    '''
+            preds = test_ocsvm(params)
+            with open('/mnt/raid0_24TB/isaiah/code/NestedGraphs/anomaly_detection/ocsvm_out/c%0.3f_d%d' % (c, d), 'wb+') as f:
+                pickle.dump(preds, f)
+    

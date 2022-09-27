@@ -1,12 +1,13 @@
+import os 
+import pickle
 import sys
-from unicodedata import bidirectional 
 
 from dateutil.parser import isoparse
 from joblib import Parallel, delayed
 from tqdm import tqdm
 
-from .hasher import proc_feats, file_feats, reg_feats, path_to_tensor
-from .datastructures import HostGraph, FullGraph, NodeList
+from .hasher import path_to_tensor
+from .datastructures import FullGraph
 
 # Globals 
 JOBS = 8
@@ -103,11 +104,16 @@ def parse_line_full(graph: FullGraph, line: str) -> None:
             bidirectional=True
         )
 
-def build_full_graph(i: int, tot: int, host: int, day: int):
+def build_full_graph(i: int, tot: int, host: int, day: int, is_mal: bool):
     g = FullGraph(host)
     prog = tqdm(desc='Lines parsed (%d/%d)' % (i+1,tot))
     
-    with open(SOURCE+'Sept%d/sysclient%04d.csv' % (day,host)) as f:
+    in_f = SOURCE+'Sept%d/sysclient%04d.csv' % (day,host)
+    if not os.path.exists(in_f):
+        prog.close()
+        return 
+
+    with open(in_f) as f:
         line = f.readline()
         while(line):
             parse_line_full(g, line)
@@ -119,12 +125,20 @@ def build_full_graph(i: int, tot: int, host: int, day: int):
 
     print("Finalizing graph")
     g.finalize(9) 
+
+    out_f = 'inputs/Sept%d/benign/full_graph%d.pkl' % (day,host)
+    if is_mal:
+        out_f = out_f.replace('benign', 'mal')
+        
+    with open(out_f, 'wb+') as f:
+        pickle.dump(g, f)
+
     return g
 
-def build_full_graphs(hosts, day, jobs=JOBS):
+def build_full_graphs(hosts, day, jobs=JOBS, is_mal=False):
     '''
     Given a sequence of hosts, build graphs for them in parallel
     '''
     return Parallel(n_jobs=min(jobs, len(hosts)), prefer='processes')(
-        delayed(build_full_graph)(i, len(hosts), h, day) for i,h in enumerate(hosts)
+        delayed(build_full_graph)(i, len(hosts), h, day, is_mal) for i,h in enumerate(hosts)
     )
