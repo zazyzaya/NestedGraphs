@@ -8,7 +8,7 @@ import csv
 from joblib import Parallel, delayed
 
 # globals
-JOBS=16
+JOBS=1
 DAY =23
 DB_HOME = '/mnt/raid0_24TB/datasets/NCR2/nested_optc/proc_ids.pkl'
 HOME='/mnt/raid0_24TB/isaiah/data/nested_optc/%d/' % DAY 
@@ -35,26 +35,38 @@ def get_uuids(fid, file_path, total):
             row = json.loads(line.decode().strip())
             
             if row['object'] == 'PROCESS': 
+                oid = row['objectID']
+                aid = row['actorID']
+
                 pid = row['pid']
                 ppid = row['ppid']
 
-                if 'image_path' in row['properties'] and pid != -1:
-                    image_path = row['properties']['image_path']
-                    objects[row['objectID']] = (pid,image_path)
+                if objects.get(oid) is None:
+                    if 'image_path' in row['properties'] and pid != -1:
+                        image_path = row['properties']['image_path']
+                        objects[row['objectID']] = (pid,image_path)
 
-                if 'parent_image_path' in row['properties'] and ppid != -1:
-                    parent_image_path = row['properties']['parent_image_path']
-                    objects[row['actorID']] = (ppid, parent_image_path) 
+                if objects.get(aid) is None:
+                    if 'parent_image_path' in row['properties'] and ppid != -1:
+                        parent_image_path = row['properties']['parent_image_path']
+                        objects[row['actorID']] = (ppid,parent_image_path) 
+
 
             if row['object'] == 'THREAD':
                 pid = row['pid']
-                image_path = row['properties'].get('image_path')
                 
-                if image_path and pid != -1:
-                    # Threads act on behalf of processes. Checking if
-                    # their object IDs are used in other events
-                    objects[row['actorID']] = (pid, image_path)
-                    objects[row['objectID']] = (pid, image_path)
+                aid = row['actorID']
+                oid = row['objectID']
+
+                image_path = row['properties'].get('image_path')
+            
+                if objects.get(aid) is None:
+                    if image_path and pid != -1:
+                        objects[row['actorID']] = (pid, image_path)
+ 
+                if objects.get(oid) is None: 
+                    if image_path and pid != -1:
+                        objects[row['objectID']] = (pid, image_path)
 
     return objects 
 

@@ -9,10 +9,9 @@ DAY = 23#int(sys.argv[1])
 mids = {
     23: [201,402,660,104,205,321,255,355,503,462,559,419,609,771,955,874,170]
 }
+# Malicious
+build_full_graphs(mids[DAY], DAY, is_mal=True)
 
 # Benign
 bids = list(set(range(1,726)) - set(mids[DAY]))
 build_full_graphs(bids, DAY)
-
-# Malicious
-build_full_graphs(mids[DAY], DAY, is_mal=True)

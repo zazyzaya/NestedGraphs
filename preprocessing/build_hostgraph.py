@@ -97,7 +97,7 @@ def parse_line_full(graph: FullGraph, line: str) -> None:
         graph.add_edge(
             ts, fmt_p(pid,p_img), key, 
             path_to_tensor(p_img, DEPTH),
-            path_to_tensor(key, DEPTH), 
+            path_to_tensor(key, DEPTH, reverse=True), 
             graph.NODE_TYPES['PROCESS'],
             graph.NODE_TYPES[obj],
             EDGES[obj][act],

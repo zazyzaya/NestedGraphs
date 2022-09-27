@@ -1,7 +1,7 @@
 import numpy as np
 import torch 
 
-def path_to_tensor(path: str, depth: int, delimeter: str='\\\\') -> torch.Tensor:
+def path_to_tensor(path: str, depth: int, delimeter: str='\\\\', reverse=False) -> torch.Tensor:
     '''
     Takes a file path and creates a tensor composed of `depth` hashes. 
     E.g. path_to_tensor('C:\\x\\y\\z\\abcd.txt', 3) returns
@@ -11,8 +11,13 @@ def path_to_tensor(path: str, depth: int, delimeter: str='\\\\') -> torch.Tensor
             path (str): A filepath to be hashed
             depth (int): The number of directories to individually hash
             delemiter (str): The path delimeter 
+            reverse (bool): if the path should be split starting from the end 
     '''
-    levels = path.lower().split(delimeter, depth)[1:]   # Trim off leading \\
+    if not reverse:
+        levels = path.lower().split(delimeter, depth)[1:]   # Trim off leading \\
+    else:
+        levels = path.lower().rsplit(delimeter, depth)   # Trim off leading \\
+        
     levels = levels + ['']*(depth-len(levels))        # pad with empty entries if needed (NOTE: hash('') == 0)
     return torch.cat([
         str_to_tensor(s) for s in levels

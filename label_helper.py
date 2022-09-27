@@ -6,7 +6,7 @@ import datetime as dt
 
 # Depending on which machine we're running on 
 if socket.gethostname() == 'colonial0':
-    HOME = '/mnt/raid0_24TB/isaiah/code/NestedGraphs'
+    HOME = '/mnt/raid0_24TB/isaiah/code/NestedGraphs/'
 
 # Note, this is running over sshfs so it may be slower to load
 # may be worth it to make a local copy? 
@@ -34,7 +34,7 @@ MAL_PROCS = {
     771: {23:[4244]},
     955: {23:[4760]},
     874: {23:[5224]},
-    #170: {23:[604]} Not in the dataset(?)
+    170: {23:[604]} # Not in the dataset(?)
 }
 
 maybe_mal = {}
@@ -59,7 +59,7 @@ for host in tqdm(MAL_PROCS.keys()):
                 print(pid,exe)
                 maybe_pid = maybe_mal[host][day].get(pid, [])
 
-                ts = dt.datetime.fromtimestamp(graph.node_times[nid].item()).isoformat()
+                ts = dt.datetime.fromtimestamp(graph.node_times[nid].item() + 1569000000).isoformat()
                 maybe_pid.append({'exe':exe,'ts':ts,'nid':nid})
                 maybe_mal[host][day][pid] = maybe_pid
 

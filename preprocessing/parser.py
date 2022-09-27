@@ -3,7 +3,8 @@ from tqdm import tqdm
 import glob
 import re
 import gzip
-import pickle as pkl
+import shelve
+import pickle
 import csv
 from joblib import Parallel, delayed
 
@@ -29,9 +30,11 @@ total_files = len(file_paths)
 print("Total Files: ", total_files)
 
 def load_group(fid, file_path, total):
-    with open('proc_ids.pkl', 'rb') as f:
-        objects = pkl.load(f)
-
+    #objects = shelve.open('database/proc_ids', 'r')
+    print("Loading ID database")
+    with open('proc_ids.pkl','rb') as f:
+        objects = pickle.load(f)
+    
     with gzip.open(file_path, 'rb') as f:
         for line in tqdm(f, desc='%d/%d' % (fid, total)):
             is_row_selected = False
@@ -39,44 +42,63 @@ def load_group(fid, file_path, total):
 
             if row['object'] == 'FILE':
                 file_name = row['hostname'].split('.')[0].lower()+'.csv'
-                pid,image_path = objects.get(row['actorID'], (None,None))
+                
                 
                 file_path = row['properties'].get('file_path')
                 new_path = row['properties'].get('new_path')
                 
+                # Only query db if we have to
+                pid = row['pid']
+                ip = row['properties'].get('image_path')
+                if ip is None: 
+                    pid,ip = objects.get(row['actorID'], (None,None))
+
                 # See if it's been cached in the database of process info 
                 # if it wasn't explicitly listed
-                if file_path is not None and image_path is not None: 
+                if file_path and ip: 
                     is_row_selected = True 
 
-                feature_vector = [pid, -1, file_path, image_path, new_path]
+                feature_vector = [pid, -1, file_path, ip, new_path]
             
             if row['object'] == 'PROCESS': 
                 file_name = row['hostname'].split('.')[0].lower()+'.csv'
 
-                pid,image_path = objects.get(row['objectID'], (None,None))
-                ppid,parent_image_path = objects.get(row['actorID'], (None,None))
+                pid,ppid = row['pid'], row['ppid']
+                props = row['properties']
 
-                if image_path is not None:
+                ip = props.get('image_path')
+                pip = props.get('parent_image_path')
+
+                # Only query if we have to 
+                if ip is None:
+                    pid,ip = objects.get(row['objectID'],(None,None))
+                if pip is None: 
+                    ppid,pip = objects.get(row['actorID'],(None,None))
+
+                if ip is not None:
                     is_row_selected = True 
 
                 # Useless to know a process was accessed by some unknown process
-                if row['action'] == 'OPEN' and ppid is None:
+                if row['action'] == 'OPEN' and ppid is None or ppid==-1:
                     is_row_selected = False 
 
-                feature_vector = [pid, ppid, image_path, parent_image_path]
+                feature_vector = [pid, ppid, ip, pip]
                 
             if row['object'] == 'REGISTRY':
                 file_name = row['hostname'].split('.')[0].lower()+'.csv'
-                pid,image_path = objects.get(row['actorID'], (None, None))
+                
+                pid,ip = row['pid'], row['properties'].get('image_path')
+                if ip is None:
+                    pid,ip = objects.get(row['actorID'],(None,None))
 
-                key = row['properties'].get('key')
-                value = row['properties'].get('value')
+                props = row['properties']
+                key = props.get('key','') + '\\' + props.get('data','')
 
-                if image_path is not None: 
+                if ip is not None: 
                    is_row_selected = True 
 
-                feature_vector = [pid, -1, key, value, image_path]
+                # Value is unused. Just cat it to the key for easier access
+                feature_vector = [pid, -1, key, None, ip]
 
             if is_row_selected:
                 with open(HOME + file_name, "a+") as fa:
