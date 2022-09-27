@@ -55,7 +55,7 @@ HOME = HOME + 'Sept%d/benign/' % DAY
 
 hp = HYPERPARAMS = SimpleNamespace(
     tsize=64, hidden=32, heads=8, 
-    emb_size=128, layers=3, nsize=128,
+    emb_size=512, layers=3, nsize=128,
     epochs=100, lr=0.0001
 )
 
