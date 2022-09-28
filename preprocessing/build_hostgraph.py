@@ -104,7 +104,7 @@ def parse_line_full(graph: FullGraph, line: str) -> None:
             bidirectional=True
         )
 
-def build_full_graph(i: int, tot: int, host: int, day: int, is_mal: bool):
+def build_full_graph(i: int, tot: int, host: int, day: int, is_mal: bool, write=True):
     g = FullGraph(host)
     prog = tqdm(desc='Lines parsed (%d/%d)' % (i+1,tot))
     
@@ -126,12 +126,13 @@ def build_full_graph(i: int, tot: int, host: int, day: int, is_mal: bool):
     print("Finalizing graph")
     g.finalize(9) 
 
-    out_f = 'inputs/Sept%d/benign/full_graph%d.pkl' % (day,host)
-    if is_mal:
-        out_f = out_f.replace('benign', 'mal')
-        
-    with open(out_f, 'wb+') as f:
-        pickle.dump(g, f)
+    if write:
+        out_f = 'inputs/Sept%d/benign/full_graph%d.pkl' % (day,host)
+        if is_mal:
+            out_f = out_f.replace('benign', 'mal')
+            
+        with open(out_f, 'wb+') as f:
+            pickle.dump(g, f)
 
     return g
 

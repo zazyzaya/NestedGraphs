@@ -357,11 +357,11 @@ class FullGraph(HostGraph):
         return False
         
     def add_edge(self, ts, src,dst, sfeat, dfeat, stype, dtype, rel, bidirectional=False):
-        self.add_node(ts, src, sfeat, stype)
-        self.add_node(ts, dst, dfeat, dtype)
-        
         if src[:4] == 'None' or dst[:4] == 'None':
-            return 
+            return
+        
+        self.add_node(ts, src, sfeat, stype)
+        self.add_node(ts, dst, dfeat, dtype) 
 
         src_id = self.node_map[src]
         dst_id = self.node_map[dst]

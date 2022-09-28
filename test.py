@@ -1,7 +1,3 @@
-import pickle 
-from utils.perterbations import subgraph 
+from preprocessing.build_hostgraph import build_full_graph
 
-with open('/mnt/raid0_24TB/isaiah/code/NestedGraphs/inputs/Sept23/benign/full_graph1.pkl', 'rb') as f:
-    g = pickle.load(f)
-
-subgraph(g)
+build_full_graph(1,1,1,23,False,False)

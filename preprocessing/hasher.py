@@ -14,7 +14,13 @@ def path_to_tensor(path: str, depth: int, delimeter: str='\\\\', reverse=False) 
             reverse (bool): if the path should be split starting from the end 
     '''
     if not reverse:
-        levels = path.lower().split(delimeter, depth)[1:]   # Trim off leading \\
+        levels = path.lower().split(delimeter, depth)   
+
+        # Sometimes gets passed a name without any levels (poor logging)
+        # unclear how to handle this, but for now, just hash it on its own
+        if len(levels) > 1:
+            levels = levels[1:] # Trim off leading \\
+
     else:
         levels = path.lower().rsplit(delimeter, depth-1)   # Trim off leading \\
         
