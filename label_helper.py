@@ -15,6 +15,9 @@ elif socket.gethostname() == 'orion.ece.seas.gwu.edu':
 
 MAL_GRAPHS = [201,402,660,104,205,321,255,355,503,462,559,419,609,771,955,874,170]
 
+# On day 1, every malicious process is powershell.exe
+ALWAYS_PS = True 
+
 # Schema:
 #   Host:{ day: [pids] }
 MAL_PROCS = {
@@ -37,6 +40,7 @@ MAL_PROCS = {
     170: {23:[604]} # Not in the dataset(?)
 }
 
+
 maybe_mal = {}
 for host in tqdm(MAL_PROCS.keys()): 
     maybe_mal[host] = dict()
@@ -52,10 +56,10 @@ for host in tqdm(MAL_PROCS.keys()):
             if graph.ntypes[nid] != graph.NODE_TYPES['PROCESS']:
                 continue 
 
-            pid,exe = pid.split(':')
+            pid,exe = pid.split(':',1)
             pid = int(pid)
             
-            if pid in mal:
+            if pid in mal and (exe == 'POWERSHELL.EXE' or not ALWAYS_PS):
                 print(pid,exe)
                 maybe_pid = maybe_mal[host][day].get(pid, [])
 

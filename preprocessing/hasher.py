@@ -16,7 +16,7 @@ def path_to_tensor(path: str, depth: int, delimeter: str='\\\\', reverse=False) 
     if not reverse:
         levels = path.lower().split(delimeter, depth)[1:]   # Trim off leading \\
     else:
-        levels = path.lower().rsplit(delimeter, depth)   # Trim off leading \\
+        levels = path.lower().rsplit(delimeter, depth-1)   # Trim off leading \\
         
     levels = levels + ['']*(depth-len(levels))        # pad with empty entries if needed (NOTE: hash('') == 0)
     return torch.cat([
