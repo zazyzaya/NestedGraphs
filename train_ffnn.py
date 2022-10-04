@@ -35,12 +35,12 @@ elif socket.gethostname() == 'orion.ece.seas.gwu.edu':
 HOME = HOME + 'Sept%d/benign/' % DAY 
 
 hp = HYPERPARAMS = SimpleNamespace(
-    hidden=512, layers=3,
-    epochs=50, lr=0.001
+    hidden=128*4, layers=2,
+    epochs=50, lr=0.00025
 )
 
 bce = nn.BCEWithLogitsLoss()
-def step(model, graph, zs, batch): 
+def step(model, graph, zs, batch, max_edges=2**6): 
     src,dst = [],[]
 
     for nid in batch:
@@ -56,6 +56,11 @@ def step(model, graph, zs, batch):
         0, graph.x.size(0), 
         dst.size()
     )
+
+    sample = torch.randperm(src.size(0))[:max_edges]
+    src = src[sample]
+    dst = dst[sample]
+    neg_d = neg_d[sample]
 
     pos = model(zs[src], zs[dst])
     neg = model(zs[src], zs[neg_d])
@@ -74,7 +79,7 @@ def train(rank, world_size, hp):
     graphs = glob.glob(HOME+'full_graph*')
     random.shuffle(graphs)
 
-    val_graphs = [graphs.pop() for _ in range(1)]
+    val_graphs = [graphs.pop() for _ in range(25)]
     model = SimpleDetector(
         128, hp.hidden, hp.layers, device=DEVICE
     )
@@ -84,11 +89,13 @@ def train(rank, world_size, hp):
         random.shuffle(graphs)
 
         for i,g_file in enumerate(graphs):
+            torch.cuda.empty_cache()
+            
             with open(g_file,'rb') as f:
                 g = pickle.load(f).to(DEVICE)
             
             embs = torch.load(
-                g_file.replace('full_', 'tgat_emb_clms')
+                g_file.replace('full_', 'tgat_emb_gat')
             )
             zs = embs['zs'].to(DEVICE)
             procs=embs['proc_mask'].to(DEVICE)
@@ -115,24 +122,24 @@ def train(rank, world_size, hp):
                     ), 'saved_models/anom.pkl'
                 )
                 '''
-        
-        thresh = float('inf')
-        with torch.no_grad():
-            model.eval()
-            for g_file in val_graphs:
-                with open(g_file,'rb') as f:
-                    g = pickle.load(f).to(DEVICE)
+            if i%25 == 0:
+                thresh = float('inf')
+                with torch.no_grad():
+                    model.eval()
+                    for g_file in val_graphs:
+                        with open(g_file,'rb') as f:
+                            g = pickle.load(f).to(DEVICE)
+                        
+                        embs = torch.load(
+                            g_file.replace('full_', 'tgat_emb_gat')
+                        )
+                        zs = embs['zs'].to(DEVICE)
+                        procs=embs['proc_mask'].to(DEVICE)
+
+                        preds = model.predict(g, zs, procs)
+                        thresh = min(thresh, preds.min())
                 
-                embs = torch.load(
-                    g_file.replace('full_', 'tgat_emb_clms')
-                )
-                zs = embs['zs'].to(DEVICE)
-                procs=embs['proc_mask'].to(DEVICE)
-
-                preds = model.predict(g, zs, procs)
-                thresh = min(thresh, preds.min())
-
-        test_per_cc(model, thresh=thresh)
+                    test_per_cc(model, thresh=thresh)
 
 
 @torch.no_grad()
@@ -155,7 +162,7 @@ def test_per_cc(model, thresh=None):
             g = pickle.load(f).to(DEVICE)
 
         embs = torch.load(
-            g_file.replace('full_', 'tgat_emb_clms')
+            g_file.replace('full_', 'tgat_emb_gat')
         )
         
         zs = embs['zs'].to(DEVICE)
@@ -171,7 +178,7 @@ def test_per_cc(model, thresh=None):
     ys = torch.cat(ys).to('cpu')
 
     if thresh is None:
-        thresh = preds.quantile(0.99)
+        thresh = preds.quantile(0.999)
     else:
         thresh = 1-torch.sigmoid(thresh).cpu()
 

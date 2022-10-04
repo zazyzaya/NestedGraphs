@@ -55,8 +55,8 @@ HOME = HOME + 'Sept%d/benign/' % DAY
 
 hp = HYPERPARAMS = SimpleNamespace(
     tsize=64, hidden=32, heads=8, 
-    emb_size=512, layers=3, nsize=128,
-    epochs=100, lr=0.0001
+    emb_size=128, layers=3, nsize=128,
+    epochs=100, lr=0.0001, batch_size=256
 )
 
 def fair_scheduler(n_workers, costs):
@@ -127,6 +127,8 @@ def proc_job(rank, world_size, hp):
                 for p in procs
             ]
             my_batch = torch.tensor(fair_scheduler(world_size, costs)[rank]).to(DEVICES[rank]).long()
+            my_batch = my_batch[torch.randperm(my_batch.size(0))[:hp.batch_size]]
+            
             opt.zero_grad()
             loss = mean_shifted_cl(tgat, g, my_batch)
             loss.backward()
@@ -149,6 +151,7 @@ def proc_job(rank, world_size, hp):
 
             # Try to save some memory 
             del g,my_batch
+            torch.cuda.empty_cache()
 
         if rank==0:
             prog.close() 
