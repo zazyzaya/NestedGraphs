@@ -10,7 +10,7 @@ from .hasher import path_to_tensor
 from .datastructures import FullGraph
 
 # Globals 
-JOBS = 8
+JOBS = 17
 SOURCE = '/mnt/raid0_24TB/datasets/NCR2/nested_optc/hosts/'
 
 # Hyper parameters
@@ -21,16 +21,22 @@ DEPTH = 16
 
 EDGES = {
     'PROCESS': {
-        'CREATE': 0, 'OPEN': 1 # Open is unused.. produces too much clutter
+        'CREATE': 0, 'OPEN': 1, # Open is unused.. produces too much clutter
+        'TERMINATE': 2
     },
     'FILE': {
-        'CREATE': 2, 'MODIFY': 3, 
-        'READ': 4, 'WRITE': 5, 
-        'DELETE': 6,
+        'CREATE': 3, 'MODIFY': 4, 
+        'READ': 5, 'WRITE': 6, 
+        'DELETE': 7,
         'RENAME': None
     },
+    # No registry read events are captured by eCAR... 
+    # is it even worth tracking these? 
     'REGISTRY': {
-        'ADD': 7, 'EDIT': 8, 'REMOVE': 9
+        'ADD': 8, 'EDIT': 9, 'REMOVE': 10
+    },
+    'MODULE': {
+        'LOAD': 11
     }
 }
 
@@ -81,15 +87,27 @@ def parse_line_full(graph: FullGraph, line: str) -> None:
             )
             return 
 
-        graph.add_edge(
-            ts, fmt_p(pid,p_img), path,
-            path_to_tensor(p_img, DEPTH),
-            path_to_tensor(path, DEPTH),
-            graph.NODE_TYPES['PROCESS'],
-            graph.NODE_TYPES[obj],
-            EDGES[obj][act],
-            bidirectional=True
-        )
+        # File -> Proc
+        if act == 'READ':
+            graph.add_edge(
+                ts, path, fmt_p(pid,p_img),
+                path_to_tensor(path, DEPTH),
+                path_to_tensor(p_img, DEPTH),
+                graph.NODE_TYPES[obj],
+                graph.NODE_TYPES['PROCESS'],
+                EDGES[obj][act],
+            )
+
+        # Proc -> File
+        else:
+            graph.add_edge(
+                ts, fmt_p(pid,p_img), path,
+                path_to_tensor(p_img, DEPTH),
+                path_to_tensor(path, DEPTH),
+                graph.NODE_TYPES['PROCESS'],
+                graph.NODE_TYPES[obj],
+                EDGES[obj][act],
+            )
     
 
     elif obj == 'REGISTRY': 
@@ -102,6 +120,19 @@ def parse_line_full(graph: FullGraph, line: str) -> None:
             graph.NODE_TYPES[obj],
             EDGES[obj][act],
             bidirectional=True
+        )
+
+    elif obj == 'MODULE': 
+        pid, _, mod, p_img = feats
+
+        # Always a load event (mod -> proc)
+        # kind of unique in that they always point to procs and have
+        # no parents. Don't want to treat them as regular edges
+        # Have plans of using them as process features when aggregated?
+        graph.add_module(
+            ts, fmt_p(pid,p_img), mod, 
+            path_to_tensor(p_img, DEPTH), 
+            path_to_tensor(mod, DEPTH)
         )
 
 def build_full_graph(i: int, tot: int, host: int, day: int, is_mal: bool, write=True):
@@ -124,7 +155,7 @@ def build_full_graph(i: int, tot: int, host: int, day: int, is_mal: bool, write=
     prog.close()
 
     print("Finalizing graph")
-    g.finalize(9) 
+    g.finalize(12) 
 
     if write:
         out_f = 'inputs/Sept%d/benign/full_graph%d.pkl' % (day,host)

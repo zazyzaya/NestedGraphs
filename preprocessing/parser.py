@@ -34,16 +34,13 @@ def load_group(fid, file_path, total):
     print("Loading ID database")
     with open('proc_ids.pkl','rb') as f:
         objects = pickle.load(f)
-    
+
     with gzip.open(file_path, 'rb') as f:
         for line in tqdm(f, desc='%d/%d' % (fid, total)):
             is_row_selected = False
             row = json.loads(line.decode().strip())
 
             if row['object'] == 'FILE':
-                file_name = row['hostname'].split('.')[0].lower()+'.csv'
-                
-                
                 file_path = row['properties'].get('file_path')
                 new_path = row['properties'].get('new_path')
                 
@@ -56,15 +53,17 @@ def load_group(fid, file_path, total):
                 # See if it's been cached in the database of process info 
                 # if it wasn't explicitly listed
                 if file_path and ip: 
+                    file_name = row['hostname'].split('.')[0].lower()+'.csv'
                     is_row_selected = True 
-
-                feature_vector = [pid, -1, file_path, ip, new_path]
+                    feature_vector = [pid, -1, file_path, ip, new_path]
             
-            if row['object'] == 'PROCESS': 
-                file_name = row['hostname'].split('.')[0].lower()+'.csv'
-
+            elif row['object'] == 'PROCESS': 
                 pid,ppid = row['pid'], row['ppid']
                 props = row['properties']
+
+                # Avoid duplicate lines (often proc-opens are recorded a lot of times in a row)
+                if row['action']==line[2] and [pid,ppid] == line[3][:2]:
+                    continue 
 
                 ip = props.get('image_path')
                 pip = props.get('parent_image_path')
@@ -75,34 +74,49 @@ def load_group(fid, file_path, total):
                 if pip is None: 
                     ppid,pip = objects.get(row['actorID'],(None,None))
 
-                if ip is not None:
-                    is_row_selected = True 
-
                 # Useless to know a process was accessed by some unknown process
                 if row['action'] == 'OPEN' and ppid is None or ppid==-1:
-                    is_row_selected = False 
+                    continue 
 
-                feature_vector = [pid, ppid, ip, pip]
+                if ip is not None:
+                    file_name = row['hostname'].split('.')[0].lower()+'.csv'
+                    is_row_selected = True 
+                    feature_vector = [pid, ppid, ip, pip]
                 
-            if row['object'] == 'REGISTRY':
-                file_name = row['hostname'].split('.')[0].lower()+'.csv'
-                
+            elif row['object'] == 'REGISTRY':
                 pid,ip = row['pid'], row['properties'].get('image_path')
                 if ip is None:
                     pid,ip = objects.get(row['actorID'],(None,None))
 
                 props = row['properties']
-                key = props.get('key','') + '\\' + props.get('data','')
+                key = props.get('key','')
+                val =  props.get('data','')
 
                 if ip is not None: 
-                   is_row_selected = True 
+                    file_name = row['hostname'].split('.')[0].lower()+'.csv'
+                    is_row_selected = True 
+                    feature_vector = [pid, -1, key, val, ip]
 
-                # Value is unused. Just cat it to the key for easier access
-                feature_vector = [pid, -1, key, None, ip]
+            elif row['object'] == 'MODULE':
+                pid = row['pid']
+                if not (ip := row['properties'].get('image_path')):
+                    if pid_ip := objects.get(row['actorID']):
+                        pid, ip = pid_ip  
+                    else: 
+                        continue
+                
+                file_name = row['hostname'].split('.')[0].lower()+'.csv'
+                mod_path = row['properties']['module_path']
+                
+                feature_vector = [pid, -1, mod_path, ip]
+                is_row_selected = True
+
+            else:
+                continue
 
             if is_row_selected:
                 with open(HOME + file_name, "a+") as fa:
-                    parsed_row = [row['timestamp'], row['object'], row['action'], feature_vector]
+                    parsed_row = [row['timestamp'], row['object'], row['action'], feature_vector, row['actorID'], row['objectID']]
                     writer = csv.writer(fa)
                     writer.writerow(parsed_row)
 

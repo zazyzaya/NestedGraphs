@@ -1,4 +1,5 @@
 import json
+import os 
 from tqdm import tqdm
 import glob
 import re
@@ -8,7 +9,7 @@ import csv
 from joblib import Parallel, delayed
 
 # globals
-JOBS=1
+JOBS=16
 DAY =23
 DB_HOME = '/mnt/raid0_24TB/datasets/NCR2/nested_optc/proc_ids.pkl'
 HOME='/mnt/raid0_24TB/isaiah/data/nested_optc/%d/' % DAY 
@@ -67,6 +68,14 @@ def get_uuids(fid, file_path, total):
                 if objects.get(oid) is None: 
                     if image_path and pid != -1:
                         objects[row['objectID']] = (pid, image_path)
+
+
+            if row['object'] == 'MODULE':                
+                aid = row['actorID']
+                pid = row['pid']
+                if image_path := row['properties'].get('image_path'):
+                    objects[aid] = (pid, image_path)
+
 
     return objects 
 
