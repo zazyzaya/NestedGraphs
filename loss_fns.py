@@ -28,3 +28,7 @@ def contrastive_loss(x1, x2, tau=0.25, assume_normed=False):
         neg = neg_non_norm
 
     return (-pos + torch.logsumexp(neg, dim=1)).mean()
+
+
+def threatrace_loss(g, z):
+    pass

@@ -5,6 +5,7 @@ import socket
 import torch 
 from torch_geometric import nn as geo_nn
 from torch_geometric.utils import dense_to_sparse, add_remaining_self_loops
+from torch_scatter import scatter 
 
 # Depending on which machine we're running on 
 if socket.gethostname() == 'colonial0':
@@ -28,7 +29,7 @@ def propagate_labels(g, day, label_f=HOME+'inputs/manual_labels.txt'):
     # check for loops and can just do BFS to assign labels 
     domain = set() 
     for v in anoms[str(g.gid)][str(day)].values():
-        domain.add(int(v['nid']))
+        domain.add(int(v[0]['nid']))
 
     for d in domain:
         labels[d] = 1
@@ -173,3 +174,20 @@ def get_similar(x, feat_dim=3, path_dims=8, depth=1):
     vals,idx = truncated.unique(dim=0,return_inverse=True)
 
     return idx 
+
+
+def threatrace_feature_extraction(g):
+    # To quickly send types to neighbors
+    ret = torch.zeros((g.x.size(0), g.edge_feat_dim*2), device=g.x.device)
+
+    ei = get_edge_index(g)
+    src_e_types = scatter(g.edge_attr, ei[0], dim=0)
+    dst_e_types = scatter(g.edge_attr, ei[1], dim=0)
+
+    # Sometimes nodes don't have src or dst edges so matrices will vary 
+    # in size. This makes sure all nodes are accounted for, even if later 
+    # indexed nodes don't have edges
+    ret[torch.arange(src_e_types.size(0)), :g.edge_feat_dim] = src_e_types
+    ret[torch.arange(dst_e_types.size(0)), g.edge_feat_dim:] = dst_e_types
+
+    return ret, ei
