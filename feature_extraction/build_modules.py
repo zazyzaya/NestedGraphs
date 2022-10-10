@@ -1,5 +1,7 @@
 from collections import defaultdict
+import glob 
 import pickle
+import socket 
 
 from joblib import Parallel, delayed
 import torch 
@@ -8,14 +10,24 @@ from tqdm import tqdm
 
 DAY = 23
 JOBS = 16
-HOME = '/mnt/raid0_24TB/datasets/NCR2/nested_optc/hosts/'
+
+# Depending on which machine we're running on 
+if socket.gethostname() == 'colonial0':
+    HOME = '/mnt/raid0_24TB/datasets/NCR2/nested_optc/hosts/'
+
+# Note, this is running over sshfs so it may be slower to load
+# may be worth it to make a local copy? 
+elif socket.gethostname() == 'orion.ece.seas.gwu.edu':
+    HOME = '/home/isaiah/c0_OpTC/nested_optc/hosts/'
+
 HOME = HOME+'Sept%d/' % DAY 
 DLLS = HOME+'../../../unique_modules.txt'
 
 # Update later for full dataset
-HOSTS = list(range(1,25))
-IN_FILES = [HOME+'sysclient%04d_mods.csv' % i for i in HOSTS]
-OUT_DIR = 'output/'
+#HOSTS = list(range(1,25))
+#IN_FILES = [HOME+'sysclient%04d_mods.csv' % i for i in HOSTS]
+IN_FILES = glob.glob(HOME+'*_mods.csv')
+OUT_DIR = 'data/inputs/'
 
 get_id = lambda x : int(x.split('/')[-1].split('_')[0].replace('sysclient',''))
 
