@@ -342,6 +342,29 @@ class FullGraph(HostGraph):
         self.ntypes = []
         self.human_readable = dict()
 
+    
+    def __getitem__(self, key):
+        if type(key) == str: 
+            nid = self.node_map.get(key)
+            uuid = key 
+
+        elif type(key) == int:
+            nid = key 
+            if not hasattr(self, 'inv_map'):
+                self.inv_map = {v:k for k,v in self.node_map.items()}
+
+            uuid = self.inv_map[nid]
+
+        else: 
+            raise KeyError(str(key)+' not found')
+
+        return {
+            'nid':nid, 
+            'uuid':uuid, 
+            'name':self.human_readable.get(uuid),
+            'ts': self.node_times[nid]
+        }
+
     def add_node(self, ts, uuid, feat, ntype, human=None):
         if human and not self.human_readable.get(uuid):
             self.human_readable[uuid] = human
@@ -398,7 +421,7 @@ class FullGraph(HostGraph):
         self.ready = True 
 
         # Turn everything into tensors
-        self.edge_index = torch.tensor([self.src, self.dst])
+        # self.edge_index = torch.tensor([self.src, self.dst])
         
         # Get one-hot repr of node types
         nt_sparse = torch.tensor(self.ntypes)
@@ -416,7 +439,6 @@ class FullGraph(HostGraph):
         # Save in csr format for easier indexing
         self.csr_ptr = [0]
         ei = []; rels = []; ts = []
-        node_mods = []
 
         for i in range(self.num_nodes):
             neigh,t,rel = self.one_hop.get(i, [[],[],[]])

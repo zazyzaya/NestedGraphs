@@ -52,19 +52,22 @@ for host in tqdm(MAL_PROCS.keys()):
         with open(HOME+'inputs/Sept%d/mal/full_graph%d.pkl' % (day,host), 'rb') as f:
             graph = pickle.load(f)
         
-        for pid,nid in graph.node_map.items():
+        for uuid,nid in graph.node_map.items():
             if graph.ntypes[nid] != graph.NODE_TYPES['PROCESS']:
                 continue 
 
-            pid,exe = pid.split(':',1)
+            pid,exe = graph.human_readable.get(uuid,'-1:None').split(':', 1)
             pid = int(pid)
+            exe = exe.split('\\')[-1].upper()
             
             if pid in mal and (exe == 'POWERSHELL.EXE' or not ALWAYS_PS):
-                print(pid,exe)
+                print(pid,exe,uuid)
                 maybe_pid = maybe_mal[host][day].get(pid, [])
 
-                ts = dt.datetime.fromtimestamp(graph.node_times[nid].item() + 1569000000).isoformat()
-                maybe_pid.append({'exe':exe,'ts':ts,'nid':nid})
+                data = graph[nid]
+                data['ts'] = dt.datetime.fromtimestamp(data['ts'].item() + 1569000000).isoformat()
+                
+                maybe_pid.append(data)
                 maybe_mal[host][day][pid] = maybe_pid
 
 with open('inputs/maybe_mal.txt','w+') as f:
