@@ -343,13 +343,20 @@ class FullGraph(HostGraph):
         self.human_readable = dict()
 
     
-    def index(self, key):
+    def get(self, key):
         if type(key) == str: 
             nid = self.node_map.get(key)
             uuid = key 
 
         elif type(key) == int:
             nid = key 
+            if not hasattr(self, 'inv_map'):
+                self.inv_map = {v:k for k,v in self.node_map.items()}
+
+            uuid = self.inv_map[nid]
+
+        elif type(key) == torch.Tensor and (key.dim() == 0 or (key.dim() == 1 and key.size(0) == 1)):
+            nid = key.item() 
             if not hasattr(self, 'inv_map'):
                 self.inv_map = {v:k for k,v in self.node_map.items()}
 

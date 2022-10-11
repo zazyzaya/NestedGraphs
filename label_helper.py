@@ -64,7 +64,7 @@ for host in tqdm(MAL_PROCS.keys()):
                 print(pid,exe,uuid)
                 maybe_pid = maybe_mal[host][day].get(pid, [])
 
-                data = graph[nid]
+                data = graph.get(nid)
                 data['ts'] = dt.datetime.fromtimestamp(data['ts'].item() + 1569000000).isoformat()
                 
                 maybe_pid.append(data)
