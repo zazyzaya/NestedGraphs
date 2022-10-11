@@ -343,7 +343,7 @@ class FullGraph(HostGraph):
         self.human_readable = dict()
 
     
-    def __getitem__(self, key):
+    def index(self, key):
         if type(key) == str: 
             nid = self.node_map.get(key)
             uuid = key 
@@ -369,7 +369,7 @@ class FullGraph(HostGraph):
         if human and not self.human_readable.get(uuid):
             self.human_readable[uuid] = human
         
-        if not self.node_map.get(uuid): 
+        if self.node_map.get(uuid) is None: 
             self.x.append(feat)
             self.node_times.append(ts)
             

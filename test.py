@@ -1,7 +1,3 @@
-import pickle 
-FNAME = '/home/isaiah/code/NestedGraphs/inputs/Sept23/mal/full_graph201.pkl'
+from preprocessing.build_hostgraph import build_full_graph
 
-with open(FNAME, 'rb') as f:
-    g = pickle.load(f)
-
-g.get_one_hop(19510)
+build_full_graph(1,1,503,23,True,False)

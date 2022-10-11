@@ -151,8 +151,8 @@ def build_full_graph(i: int, tot: int, host: int, day: int, is_mal: bool, write=
         if is_mal:
             out_f = out_f.replace('benign', 'mal')
             
-        with open(out_f, 'wb+') as f:
-            pickle.dump(g, f)
+        #with open(out_f, 'wb+') as f:
+            #pickle.dump(g, f)
 
     return g
 
