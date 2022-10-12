@@ -15,9 +15,6 @@ JOBS = 17
 SOURCE = '/mnt/raid0_24TB/datasets/NCR2/nested_optc/hosts/'
 
 # Hyper parameters
-PROC_DEPTH = 16
-FILE_DEPTH = 16
-REG_DEPTH = 16
 DEPTH = 16
 
 EDGES = {
