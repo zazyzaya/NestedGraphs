@@ -25,9 +25,14 @@ def path_to_tensor(path: str, depth: int, delimeter: str='\\', reverse=False) ->
         levels = path.lower().rsplit(delimeter, depth-1)   # Trim off leading \\
         
     levels = levels + ['']*(depth-len(levels))        # pad with empty entries if needed (NOTE: hash('') == 0)
-    return torch.cat([
-        str_to_tensor(s) for s in levels
-    ], dim=0)
+    
+    # Stick everything together, and enforce values can only be in {0,1}
+    return torch.round(
+        (torch.cat([
+            str_to_tensor(s) 
+            for s in levels
+        ], dim=0) 
+    + 1) / 2)
 
 def str_to_tensor(s: str, dim: int=8) -> torch.Tensor:
     '''
@@ -40,10 +45,7 @@ def str_to_tensor(s: str, dim: int=8) -> torch.Tensor:
     '''
     assert dim <= 8 and dim >=1, 'Dimension must be in range (0,8]'
     b = abs(hash(s)).to_bytes(8, 'big')
-
-    # Want values to always be 0 or 1 s.t. distance between hashes is better 
-    # approximated by the dot product
-    return torch.round(torch.frombuffer(b, dtype=torch.int8)[:dim] / 128)
+    return torch.frombuffer(b, dtype=torch.int8)[:dim] / 128
 
 
 # # # # # # # # # # # # # # # # # # 

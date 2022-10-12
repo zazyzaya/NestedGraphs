@@ -15,7 +15,7 @@ JOBS = 17
 SOURCE = '/mnt/raid0_24TB/datasets/NCR2/nested_optc/hosts/'
 
 # Hyper parameters
-DEPTH = 16
+DEPTH = 8
 
 EDGES = {
     'PROCESS': {
@@ -70,8 +70,8 @@ def parse_line_full(graph: FullGraph, line: str) -> None:
 
         graph.add_edge(
             ts, src_id, dst_id,
-            torch.zeros(DEPTH*4),
-            torch.zeros(DEPTH*4),
+            torch.zeros(DEPTH*8),
+            torch.zeros(DEPTH*8),
             graph.NODE_TYPES[obj], 
             graph.NODE_TYPES[obj],
             EDGES[obj][act],
@@ -101,7 +101,7 @@ def parse_line_full(graph: FullGraph, line: str) -> None:
             graph.add_edge(
                 ts, dst_id, src_id,
                 path_to_tensor(path, DEPTH),
-                torch.zeros(DEPTH*4),
+                torch.zeros(DEPTH*8),
                 graph.NODE_TYPES[obj],
                 graph.NODE_TYPES['PROCESS'],
                 EDGES[obj][act],
@@ -112,7 +112,7 @@ def parse_line_full(graph: FullGraph, line: str) -> None:
         else:
             graph.add_edge(
                 ts, src_id, dst_id,
-                torch.zeros(DEPTH*4),
+                torch.zeros(DEPTH*8),
                 path_to_tensor(path, DEPTH),
                 graph.NODE_TYPES['PROCESS'],
                 graph.NODE_TYPES[obj],

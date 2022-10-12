@@ -51,7 +51,7 @@ def add_modules(gid, day=23, is_mal=False, write=True):
 This should really be done in the graph building phase, 
 but may as well add it in here. 
 '''
-DEPTH = 16
+DEPTH = 8
 def add_proc_name(gid, day=23, is_mal=False, write=True):
     mal_str = 'mal' if is_mal else 'benign'
     g_file = GRAPH_HOME+'Sept%d/%s/full_graph%d.pkl' % (
