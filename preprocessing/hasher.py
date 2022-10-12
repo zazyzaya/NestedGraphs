@@ -1,7 +1,7 @@
 import numpy as np
 import torch 
 
-def path_to_tensor(path: str, depth: int, delimeter: str='\\\\', reverse=False) -> torch.Tensor:
+def path_to_tensor(path: str, depth: int, delimeter: str='\\', reverse=False) -> torch.Tensor:
     '''
     Takes a file path and creates a tensor composed of `depth` hashes. 
     E.g. path_to_tensor('C:\\x\\y\\z\\abcd.txt', 3) returns
