@@ -29,7 +29,7 @@ def path_to_tensor(path: str, depth: int, delimeter: str='\\', reverse=False) ->
         str_to_tensor(s) for s in levels
     ], dim=0)
 
-def str_to_tensor(s: str, dim: int=4) -> torch.Tensor:
+def str_to_tensor(s: str, dim: int=8) -> torch.Tensor:
     '''
     Converts a string to a tensor (dim always 8 for now.. unsure
     how to update this)
@@ -40,7 +40,10 @@ def str_to_tensor(s: str, dim: int=4) -> torch.Tensor:
     '''
     assert dim <= 8 and dim >=1, 'Dimension must be in range (0,8]'
     b = abs(hash(s)).to_bytes(8, 'big')
-    return torch.frombuffer(b, dtype=torch.int8)[:dim] / 128
+
+    # Want values to always be 0 or 1 s.t. distance between hashes is better 
+    # approximated by the dot product
+    return torch.round(torch.frombuffer(b, dtype=torch.int8)[:dim] / 128)
 
 
 # # # # # # # # # # # # # # # # # # 
