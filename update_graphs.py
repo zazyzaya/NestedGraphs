@@ -1,15 +1,15 @@
 import glob
 import torch 
 import pickle
+from joblib import Parallel, delayed
 
 from preprocessing.hasher import path_to_tensor
 
-GRAPH_HOME = 'inputs/'
-FEAT_HOME = 'feature_extraction/data/features/'
+HOME = 'inputs/'
 
 def add_modules(gid, day=23, is_mal=False, write=True):
     mal_str = 'mal' if is_mal else 'benign'
-    g_file = GRAPH_HOME+'Sept%d/%s/full_graph%d.pkl' % (
+    g_file = HOME+'Sept%d/%s/full_graph%d.pkl' % (
         day, mal_str, gid
     )
 
@@ -23,7 +23,7 @@ def add_modules(gid, day=23, is_mal=False, write=True):
         uuids.append(g.get(p)['uuid'])
 
     # Get features of all uuids that had module loads
-    fmap,feats = torch.load(FEAT_HOME+'%d.pkl' % gid)
+    fmap,feats = torch.load(HOME+'Sept%d/features/%d.pkl' % (day,gid))
     fmap = {m:i for i,m in enumerate(fmap)}
     feats = feats.to(g.x.device)
 
@@ -54,7 +54,7 @@ but may as well add it in here.
 DEPTH = 8
 def add_proc_name(gid, day=23, is_mal=False, write=True):
     mal_str = 'mal' if is_mal else 'benign'
-    g_file = GRAPH_HOME+'Sept%d/%s/full_graph%d.pkl' % (
+    g_file = HOME+'Sept%d/%s/full_graph%d.pkl' % (
         day, mal_str, gid
     )
 
@@ -86,4 +86,29 @@ def add_proc_name(gid, day=23, is_mal=False, write=True):
 
     return g
 
-add_proc_name(201, write=False, is_mal=True)
+def update_both(gid, day=23, is_mal=False, write=True):
+    add_proc_name(gid, day, is_mal, write)
+    add_modules(gid, day, is_mal, write)
+
+if __name__ == '__main__':
+    benign = glob.glob(HOME+'Sept23/benign/*')
+    benign = [
+        int(b.split('/')[-1].split('_')[-1].replace('.pkl','').replace('graph',''))
+        for b in benign
+    ]
+
+    mal = glob.glob(HOME+'Sept23/mal/*')
+    mal = [
+        int(m.split('/')[-1].split('_')[-1].replace('.pkl','').replace('graph',''))
+        for m in mal 
+    ]
+
+    Parallel(n_jobs=32, prefer='processes')(
+        delayed(update_both)(gid, day=23, is_mal=False, write=True)
+        for gid in mal 
+    )
+
+    Parallel(n_jobs=32, prefer='processes')(
+        delayed(update_both)(gid, day=23, is_mal=False, write=True)
+        for gid in benign 
+    )
