@@ -99,6 +99,7 @@ class UnfilteredGraph(Dataset):
 
         self.x = torch.stack(self.x)
         self.node_ts = torch.tensor(self.node_ts)
+        self.ntype = torch.tensor(self.ntype)
 
         # Store edges as csr matrix 
         ptr = [0] 
