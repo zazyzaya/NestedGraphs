@@ -11,7 +11,7 @@ from utils.graph_utils import get_edge_index, propagate_labels, connected_compon
 
 strip_gid = lambda x : x.split('/')[-1].split('.')[0][5:]
 HOME = '/home/isaiah/code/NestedGraphs/'
-DEVICE = 1
+DEVICE = 2
 BATCH_SIZE = 2**14 # About the max that can fit into the GPU
 
 sd,args,kwargs = torch.load(HOME+'saved_models/tgat.pkl')
@@ -56,7 +56,10 @@ with torch.no_grad():
 
 
     print("Embedding benign hosts")
-    prog = tqdm(glob.glob(HOME+'inputs/Sept%d/benign/full_graph*.pkl' % DAY))
+    prog = tqdm(#glob.glob(HOME+'inputs/Sept%d/benign/full_graph*.pkl' % DAY))
+        [HOME+'inputs/Sept%d/benign/full_graph%d.pkl' % (DAY, i) 
+        for i in range(1,26)
+    ])
     for fname in prog:
         gid = strip_gid(fname)
         prog.desc = gid 

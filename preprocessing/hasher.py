@@ -1,7 +1,7 @@
 import numpy as np
 import torch 
 
-def path_to_tensor(path: str, depth: int, delimeter: str='\\\\', reverse=False) -> torch.Tensor:
+def path_to_tensor(path: str, depth: int, delimeter: str='\\', reverse=False) -> torch.Tensor:
     '''
     Takes a file path and creates a tensor composed of `depth` hashes. 
     E.g. path_to_tensor('C:\\x\\y\\z\\abcd.txt', 3) returns
@@ -25,11 +25,16 @@ def path_to_tensor(path: str, depth: int, delimeter: str='\\\\', reverse=False) 
         levels = path.lower().rsplit(delimeter, depth-1)   # Trim off leading \\
         
     levels = levels + ['']*(depth-len(levels))        # pad with empty entries if needed (NOTE: hash('') == 0)
-    return torch.cat([
-        str_to_tensor(s) for s in levels
-    ], dim=0)
+    
+    # Stick everything together, and enforce values can only be in {0,1}
+    return torch.round(
+        (torch.cat([
+            str_to_tensor(s) 
+            for s in levels
+        ], dim=0) 
+    + 1) / 2)
 
-def str_to_tensor(s: str, dim: int=4) -> torch.Tensor:
+def str_to_tensor(s: str, dim: int=8) -> torch.Tensor:
     '''
     Converts a string to a tensor (dim always 8 for now.. unsure
     how to update this)

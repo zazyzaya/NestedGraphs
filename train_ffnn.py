@@ -21,7 +21,7 @@ from models.detector import SimpleDetector
 
 P_THREADS = 1
 DAY = 23 
-DEVICE = 1
+DEVICE = 2
 
 # Depending on which machine we're running on 
 if socket.gethostname() == 'colonial0':
@@ -74,12 +74,16 @@ def step(model, graph, zs, batch, max_edges=2**6):
     ), pos.min()
 
 
-def train(rank, world_size, hp):
+def train(hp):
     torch.set_num_threads(P_THREADS)
-    graphs = glob.glob(HOME+'full_graph*')
+    #graphs = glob.glob(HOME+'full_graph*')
+    graphs = [
+        HOME+'full_graph%d.pkl' % i
+        for i in range(1,26)
+    ]
     random.shuffle(graphs)
 
-    val_graphs = [graphs.pop() for _ in range(25)]
+    val_graphs = [graphs.pop() for _ in range(5)]
     model = SimpleDetector(
         128, hp.hidden, hp.layers, device=DEVICE
     )
@@ -95,33 +99,32 @@ def train(rank, world_size, hp):
                 g = pickle.load(f).to(DEVICE)
             
             embs = torch.load(
-                g_file.replace('full_', 'tgat_emb_gat')
+                g_file.replace('full_', 'tgat_emb_tgat')
             )
             zs = embs['zs'].to(DEVICE)
             procs=embs['proc_mask'].to(DEVICE)
 
             # Get this processes batch of jobs. In this case, 
             # nids of nodes that represent processes (x_n = [1,0,0,...,0])
-            bs = procs.size(0) // world_size
-            my_batch = procs[bs*rank : bs*(rank+1)]
+            my_batch = procs
 
             model.train()
             opt.zero_grad()
             loss, thresh = step(model, g, zs, my_batch)
             loss.backward()
             opt.step() 
-            
-            if rank==0:
-                print('[%d-%d] Loss: %0.4f' % (e,i+1,loss.item()))
-                '''
-                torch.save(
-                    (
-                        model.state_dict(), 
-                        model.args, 
-                        model.kwargs
-                    ), 'saved_models/anom.pkl'
-                )
-                '''
+
+            print('[%d-%d] Loss: %0.4f' % (e,i+1,loss.item()))
+            '''
+            torch.save(
+                (
+                    model.state_dict(), 
+                    model.args, 
+                    model.kwargs
+                ), 'saved_models/anom.pkl'
+            )
+            '''
+
             if i%25 == 0:
                 thresh = float('inf')
                 with torch.no_grad():
@@ -131,7 +134,7 @@ def train(rank, world_size, hp):
                             g = pickle.load(f).to(DEVICE)
                         
                         embs = torch.load(
-                            g_file.replace('full_', 'tgat_emb_gat')
+                            g_file.replace('full_', 'tgat_emb_tgat')
                         )
                         zs = embs['zs'].to(DEVICE)
                         procs=embs['proc_mask'].to(DEVICE)
@@ -162,7 +165,7 @@ def test_per_cc(model, thresh=None):
             g = pickle.load(f).to(DEVICE)
 
         embs = torch.load(
-            g_file.replace('full_', 'tgat_emb_gat')
+            g_file.replace('full_', 'tgat_emb_tgat')
         )
         
         zs = embs['zs'].to(DEVICE)
@@ -206,7 +209,7 @@ def test_per_cc(model, thresh=None):
 
 
 def main(hp):
-    train(0,1,hp)
+    train(hp)
 
 if __name__ == '__main__':
     main(HYPERPARAMS)

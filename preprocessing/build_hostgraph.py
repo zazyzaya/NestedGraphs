@@ -4,6 +4,7 @@ import sys
 
 from dateutil.parser import isoparse
 from joblib import Parallel, delayed
+import torch 
 from tqdm import tqdm
 
 from .hasher import path_to_tensor
@@ -14,10 +15,7 @@ JOBS = 17
 SOURCE = '/mnt/raid0_24TB/datasets/NCR2/nested_optc/hosts/'
 
 # Hyper parameters
-PROC_DEPTH = 16
-FILE_DEPTH = 16
-REG_DEPTH = 16
-DEPTH = 16
+DEPTH = 8
 
 EDGES = {
     'PROCESS': {
@@ -54,9 +52,8 @@ def parse_line_full(graph: FullGraph, line: str) -> None:
             data (HostGraph): data object containing the graph
             line (str): line from hostlog csv file
     '''
-    fields = line.split(',', 3)
-    ts, obj, act = fields[:3]
-    feats = fields[3][2:-3].split(',')
+    fields = line.split(',')
+    ts,obj,act = fields[:3]
 
     ts = fmt_ts(ts)
     if ts == 0:
@@ -68,94 +65,83 @@ def parse_line_full(graph: FullGraph, line: str) -> None:
 
         # When processes are 'OPENED' their 'parent' is the
         # source proc, and the target is the 'child'
-        pid, ppid, path, ppath = feats
+        src_id,dst_id, pid,ppid, path,ppath = fields[3:]
+        p_hr = fmt_p(pid,path); pp_hr = fmt_p(ppid,ppath)
+
         graph.add_edge(
-            ts, fmt_p(ppid,ppath), fmt_p(pid,path),
-            path_to_tensor(ppath, DEPTH),
-            path_to_tensor(path, DEPTH), 
+            ts, src_id, dst_id,
+            torch.zeros(DEPTH*8),
+            torch.zeros(DEPTH*8),
             graph.NODE_TYPES[obj], 
             graph.NODE_TYPES[obj],
             EDGES[obj][act],
+            human_src=p_hr, 
+            human_dst=pp_hr
         )
 
     elif obj == 'FILE':  
-        pid, ppid, path, p_img, new_path = feats[:5]
-
-        if act == 'RENAME': 
-            graph.update_uuid(
-                path, new_path
-            )
+        if act == 'RENAME':
             return 
+
+        try:
+            src_id,dst_id,path = fields[3:]
+            path = path.strip()
+            if not path:
+                return 
+        except ValueError:
+            # I cannot figure out what's causing this. 
+            # It seems to happen totally randomly on different files
+            # hopefully this try-catch won't slow things down too much 
+            return 
+
+
 
         # File -> Proc
         if act == 'READ':
             graph.add_edge(
-                ts, path, fmt_p(pid,p_img),
+                ts, dst_id, src_id,
                 path_to_tensor(path, DEPTH),
-                path_to_tensor(p_img, DEPTH),
+                torch.zeros(DEPTH*8),
                 graph.NODE_TYPES[obj],
                 graph.NODE_TYPES['PROCESS'],
                 EDGES[obj][act],
+                #human_src=path.split('\\')[-1]
             )
 
         # Proc -> File
         else:
             graph.add_edge(
-                ts, fmt_p(pid,p_img), path,
-                path_to_tensor(p_img, DEPTH),
+                ts, src_id, dst_id,
+                torch.zeros(DEPTH*8),
                 path_to_tensor(path, DEPTH),
                 graph.NODE_TYPES['PROCESS'],
                 graph.NODE_TYPES[obj],
                 EDGES[obj][act],
+                #human_dst=path.split('\\')[-1]
             )
     
 
-    elif obj == 'REGISTRY': 
-        pid, ppid, key, _, p_img = feats[:5]
-        graph.add_edge(
-            ts, fmt_p(pid,p_img), key, 
-            path_to_tensor(p_img, DEPTH),
-            path_to_tensor(key, DEPTH, reverse=True), 
-            graph.NODE_TYPES['PROCESS'],
-            graph.NODE_TYPES[obj],
-            EDGES[obj][act],
-            bidirectional=True
-        )
-
-    elif obj == 'MODULE': 
-        pid, _, mod, p_img = feats
-
-        # Always a load event (mod -> proc)
-        # kind of unique in that they always point to procs and have
-        # no parents. Don't want to treat them as regular edges
-        # Have plans of using them as process features when aggregated?
-        graph.add_module(
-            ts, fmt_p(pid,p_img), mod, 
-            path_to_tensor(p_img, DEPTH), 
-            path_to_tensor(mod, DEPTH)
-        )
-
 def build_full_graph(i: int, tot: int, host: int, day: int, is_mal: bool, write=True):
     g = FullGraph(host)
-    prog = tqdm(desc='Lines parsed (%d/%d)' % (i+1,tot))
     
     in_f = SOURCE+'Sept%d/sysclient%04d.csv' % (day,host)
     if not os.path.exists(in_f):
-        prog.close()
         return 
 
+    print(in_f)
+    prog = tqdm(desc='Lines parsed (%d/%d)' % (i+1,tot))
     with open(in_f) as f:
         line = f.readline()
+
         while(line):
             parse_line_full(g, line)
             line = f.readline()
             prog.update()
 
-
     prog.close()
 
     print("Finalizing graph")
-    g.finalize(12) 
+    g.finalize(8) 
 
     if write:
         out_f = 'inputs/Sept%d/benign/full_graph%d.pkl' % (day,host)
@@ -174,3 +160,7 @@ def build_full_graphs(hosts, day, jobs=JOBS, is_mal=False):
     return Parallel(n_jobs=min(jobs, len(hosts)), prefer='processes')(
         delayed(build_full_graph)(i, len(hosts), h, day, is_mal) for i,h in enumerate(hosts)
     )
+
+# Debug
+if __name__ == '__main__':
+    build_full_graph(0, 1, 559, 23, True, False)

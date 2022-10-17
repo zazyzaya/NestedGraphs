@@ -35,27 +35,15 @@ def load_group(fid, file_path, total):
     with open('proc_ids.pkl','rb') as f:
         objects = pickle.load(f)
 
+    mods = set()
     with gzip.open(file_path, 'rb') as f:
         for line in tqdm(f, desc='%d/%d' % (fid, total)):
-            is_row_selected = False
             row = json.loads(line.decode().strip())
 
             if row['object'] == 'FILE':
                 file_path = row['properties'].get('file_path')
-                new_path = row['properties'].get('new_path')
-                
-                # Only query db if we have to
-                pid = row['pid']
-                ip = row['properties'].get('image_path')
-                if ip is None: 
-                    pid,ip = objects.get(row['actorID'], (None,None))
-
-                # See if it's been cached in the database of process info 
-                # if it wasn't explicitly listed
-                if file_path and ip: 
-                    file_name = row['hostname'].split('.')[0].lower()+'.csv'
-                    is_row_selected = True 
-                    feature_vector = [pid, -1, file_path, ip, new_path]
+                file_name = row['hostname'].split('.')[0].lower()+'.csv'
+                feature_vector = [file_path]
             
             elif row['object'] == 'PROCESS': 
                 pid,ppid = row['pid'], row['ppid']
@@ -80,63 +68,66 @@ def load_group(fid, file_path, total):
 
                 if ip is not None:
                     file_name = row['hostname'].split('.')[0].lower()+'.csv'
-                    is_row_selected = True 
                     feature_vector = [pid, ppid, ip, pip]
-                
+                else:
+                    continue 
+            
+            # Regs and mods write to separate files as they are used for 
+            # feature generation in the processes later on
             elif row['object'] == 'REGISTRY':
-                pid,ip = row['pid'], row['properties'].get('image_path')
-                if ip is None:
-                    pid,ip = objects.get(row['actorID'],(None,None))
+                key = row['properties'].get('key','')
+                file_name = row['hostname'].split('.')[0].lower()+'_regs.csv'
 
-                props = row['properties']
-                key = props.get('key','')
-                val =  props.get('data','')
-
-                if ip is not None: 
-                    file_name = row['hostname'].split('.')[0].lower()+'.csv'
-                    is_row_selected = True 
-                    feature_vector = [pid, -1, key, val, ip]
+                if key:
+                    with open(HOME + file_name, "a+") as fa:
+                        parsed_row = [row['timestamp'], row['action'], row['actorID'], key]
+                        writer = csv.writer(fa)
+                        writer.writerow(parsed_row)
+                continue 
 
             elif row['object'] == 'MODULE':
-                pid = row['pid']
-                if not (ip := row['properties'].get('image_path')):
-                    if pid_ip := objects.get(row['actorID']):
-                        pid, ip = pid_ip  
-                    else: 
-                        continue
+                dll = row['properties']['module_path'].split('\\')[-3:]
                 
-                file_name = row['hostname'].split('.')[0].lower()+'.csv'
-                mod_path = row['properties']['module_path']
+                # Ignore non-default DLLs (non-inductive learning ahead for these,
+                # need guarantee of no unexpected DLLs in the future)
+                if dll[0].lower() not in ['windows','systemroot']:
+                    continue 
+
+                # Need urlmon.dll == URLMON.DLL, e.g. 
+                dll = dll[-1].lower()
                 
-                feature_vector = [pid, -1, mod_path, ip]
-                is_row_selected = True
+                # For some reason, .exe's are also in here. But those are captured by 
+                # the process entity, so only have linked libs here. 
+                if dll.endswith('.dll'):
+                    file_name = row['hostname'].split('.')[0].lower()+'_mods.csv'
+                    mods.add(dll)
+
+                    with open(HOME + file_name, "a+") as fa:
+                        # Not using objectID b.c. it sees \\Windows\\...\\*.dll as separate from \\WINDOWS\\...\\*.DLL
+                        parsed_row = [row['timestamp'], row['actorID'], dll]
+                        writer = csv.writer(fa)
+                        writer.writerow(parsed_row)
+                
+                continue
 
             else:
                 continue
 
-            if is_row_selected:
-                with open(HOME + file_name, "a+") as fa:
-                    parsed_row = [row['timestamp'], row['object'], row['action'], feature_vector, row['actorID'], row['objectID']]
-                    writer = csv.writer(fa)
-                    writer.writerow(parsed_row)
+            with open(HOME + file_name, "a+") as fa:
+                parsed_row = [row['timestamp'], row['object'], row['action'], row['actorID'], row['objectID'], *feature_vector]
+                writer = csv.writer(fa)
+                writer.writerow(parsed_row)
+
+    return mods 
 
 if __name__ == '__main__':
     # Load in all paths in parallel
-    #build_uuid_db()
-    Parallel(n_jobs=JOBS, prefer='processes')(
+    all_mods = Parallel(n_jobs=JOBS, prefer='processes')(
         delayed(load_group)(fid, path, total_files) for fid,path in enumerate(file_paths)
     )
-    #load_group(0, file_paths[0], total_files)
-    
 
-    '''
-    if os.path.exists(IP_MAP):
-        f = open(IP_MAP, 'rb')
-        ip2host = pkl.load(f)
-        f.close() 
-    else:
-        ip2host = ip2host_map(file_paths)
-
-    parse_flow(file_paths, ip2host)
-    reduce_flows()
-    '''
+    # Easier to build w2v model when all modules are known
+    mods = set().union(*all_mods)
+    with open(HOME+'unique_modules.txt', 'w+') as f:
+        for m in mods:
+            f.write(m+'\n')

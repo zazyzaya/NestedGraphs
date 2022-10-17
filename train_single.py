@@ -18,7 +18,7 @@ from models.tgat import TGAT
 from utils.graph_utils import get_similar
 from loss_fns import contrastive_loss
 
-P_THREADS = 16 # How many threads each worker gets
+P_THREADS = 8 # How many threads each worker gets
 DEVICE = 3     # Which GPU (for now just use 1)
 
 '''
@@ -55,7 +55,7 @@ elif socket.gethostname() == 'orion.ece.seas.gwu.edu':
 HOME = HOME + 'Sept%d/benign/' % DAY 
 
 hp = HYPERPARAMS = SimpleNamespace(
-    tsize=64, hidden=64, heads=16, 
+    tsize=64, hidden=64, heads=8, 
     emb_size=128, layers=3, nsize=64,
     epochs=100, lr=0.005
 )       
@@ -166,7 +166,7 @@ def train(hp):
             # nids of nodes that represent processes (x_n = [1,0,0,...,0])
             procs = (g.x[:,0] == 1).nonzero().squeeze(-1)
             opt.zero_grad()
-            loss = cl_step(tgat, g, procs)
+            loss = mean_shifted_cl(tgat, g, procs)
             loss.backward()
             opt.step() 
             
