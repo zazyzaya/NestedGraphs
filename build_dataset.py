@@ -2,7 +2,9 @@ import glob
 import sys 
 import pickle as pkl
 from preprocessing.build_hostgraph import build_full_graphs
+from preprocessing.build_unfiltered import parse_all
 
+'''
 DAY = 23#int(sys.argv[1])
 
 # Mal host IDS for given day TODO last two days
@@ -15,3 +17,5 @@ build_full_graphs(mids[DAY], DAY, is_mal=True)
 # Benign
 bids = list(set(range(1,726)) - set(mids[DAY]))
 build_full_graphs(bids, DAY)
+'''
+parse_all(8)
