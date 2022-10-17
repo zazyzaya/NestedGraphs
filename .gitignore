@@ -3,3 +3,4 @@ __pycache__/
 *.pkl
 log.txt
 preprocessing/database/*
+test.py

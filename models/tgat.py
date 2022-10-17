@@ -190,6 +190,11 @@ class TGAT(nn.Module):
         for i in range(bs):
             idx = idxs[i]
             n,t,r = neighbor_data[i]
+
+            only_spawns = r[:,0] == 1
+            n = n[only_spawns]
+            t = t[only_spawns]
+            r = r[only_spawns]
             
             # Skip neighborless nodes
             if not n.size(0):

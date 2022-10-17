@@ -16,7 +16,7 @@ if socket.gethostname() == 'colonial0':
 elif socket.gethostname() == 'orion.ece.seas.gwu.edu':
     HOME = '/home/isaiah/code/NestedGraphs/'
 
-def propagate_labels(g, day, label_f=HOME+'inputs/manual_labels.txt'):
+def propagate_labels(g, day, label_f=HOME+'inputs/maybe_mal.txt'):
     with open(label_f, 'r') as f:
         anoms = json.loads(f.read())
 
@@ -29,7 +29,7 @@ def propagate_labels(g, day, label_f=HOME+'inputs/manual_labels.txt'):
     # check for loops and can just do BFS to assign labels 
     domain = set() 
     for v in anoms[str(g.gid)][str(day)].values():
-        domain.add(int(v[0]['nid']))
+        domain = domain.union(set([int(v[i]['nid']) for i in range(len(v))]))
 
     for d in domain:
         labels[d] = 1

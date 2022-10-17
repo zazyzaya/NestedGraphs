@@ -340,35 +340,53 @@ class FullGraph(HostGraph):
         self.node_map = dict()
         self.cur_id = 0
         self.ntypes = []
-        self.human_readable = []
-        
-        self.mid = 0
-        self.mod_map = {}
-        self.modules = []
-        self.mods_owned = {}
+        self.human_readable = dict()
+
+    
+    def get(self, key):
+        if type(key) == str: 
+            nid = self.node_map.get(key)
+            uuid = key 
+
+        elif type(key) == int:
+            nid = key 
+            if not hasattr(self, 'inv_map'):
+                self.inv_map = {v:k for k,v in self.node_map.items()}
+
+            uuid = self.inv_map[nid]
+
+        elif type(key) == torch.Tensor and (key.dim() == 0 or (key.dim() == 1 and key.size(0) == 1)):
+            nid = key.item() 
+            if not hasattr(self, 'inv_map'):
+                self.inv_map = {v:k for k,v in self.node_map.items()}
+
+            uuid = self.inv_map[nid]
+
+        else: 
+            raise KeyError(str(key)+' not found')
+
+        return {
+            'nid':nid, 
+            'uuid':uuid, 
+            'name':self.human_readable.get(uuid),
+            'ts': self.node_times[nid]
+        }
 
     def add_node(self, ts, uuid, feat, ntype, human=None):
-        if uuid[:4] == 'None':
-            return False 
-
-        if not self.node_map.get(uuid): 
+        if human and not self.human_readable.get(uuid):
+            self.human_readable[uuid] = human
+        
+        if self.node_map.get(uuid) is None: 
             self.x.append(feat)
             self.node_times.append(ts)
             
             self.node_map[uuid] = self.cur_id
             self.ntypes.append(ntype)
             self.cur_id += 1
-
-            if human:
-                self.human_readable.append(human)
-
             return True 
         return False
         
     def add_edge(self, ts, src,dst, sfeat, dfeat, stype, dtype, rel, bidirectional=False, human_src=None, human_dst=None):
-        if src[:4] == 'None' or dst[:4] == 'None':
-            return
-        
         self.add_node(ts, src, sfeat, stype, human_src)
         self.add_node(ts, dst, dfeat, dtype, human_dst) 
 
@@ -387,22 +405,6 @@ class FullGraph(HostGraph):
                 ts, dst, src, dfeat, sfeat, 
                 dtype, stype, rel, bidirectional=False
             )
-
-    def add_module(self, ts, owner, mod, owner_feat, mod_feats, human_readable=None):
-        # Add the process if it doesn't exist already
-        self.add_node(ts, owner, owner_feat, self.NODE_TYPES['PROCESS'], human_readable)
-
-        if not self.mod_map.get(mod):
-            self.mod_map[mod] = self.mid 
-            self.modules.append(mod_feats)
-            self.mid += 1 
-
-        mid = self.mod_map[mod]
-        nid = self.node_map[owner]
-
-        owned = self.mods_owned.get(nid, [])
-        owned.append(mid)
-        self.mods_owned[nid] = owned 
 
 
     def update_uuid(self, old, new):
@@ -426,7 +428,7 @@ class FullGraph(HostGraph):
         self.ready = True 
 
         # Turn everything into tensors
-        self.edge_index = torch.tensor([self.src, self.dst])
+        # self.edge_index = torch.tensor([self.src, self.dst])
         
         # Get one-hot repr of node types
         nt_sparse = torch.tensor(self.ntypes)
@@ -444,7 +446,6 @@ class FullGraph(HostGraph):
         # Save in csr format for easier indexing
         self.csr_ptr = [0]
         ei = []; rels = []; ts = []
-        node_mods = []
 
         for i in range(self.num_nodes):
             neigh,t,rel = self.one_hop.get(i, [[],[],[]])
@@ -460,14 +461,6 @@ class FullGraph(HostGraph):
 
             # Update csr matrix pointer
             self.csr_ptr.append(self.csr_ptr[-1] + t.size(0))
-
-            # Add the list of modules owned (or empty list)
-            node_mods.append(torch.tensor(
-                self.mods_owned.get(i,[])
-            ))
-
-        self.mods_owned = node_mods
-        self.modules = torch.cat(self.modules, dim=0)
 
         self.edge_index = torch.cat(ei, dim=0)
         self.edge_attr = torch.cat(rels, dim=0)
@@ -490,6 +483,5 @@ class FullGraph(HostGraph):
         self.edge_index = self.edge_index.to(device)
         self.edge_attr = self.edge_attr.to(device)
         self.edge_ts = self.edge_ts.to(device)
-        self.modules = self.modules.to(device)
 
         return self 

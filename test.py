@@ -1,3 +1,11 @@
-from preprocessing.build_hostgraph import build_full_graph
+import glob 
+import pickle
+import torch 
 
-build_full_graph(1,1,1,23,False,False)
+from utils.graph_utils import propagate_labels
+
+FEATS = 'feature_extraction/data/features/'
+GRAPHS = 'inputs/Sept23/mal/'
+
+
+
