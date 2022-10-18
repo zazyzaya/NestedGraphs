@@ -1,0 +1,14 @@
+namespace(hidden=128, layers=2, samples=128, minibatch=25, batch_size=2048, lr=0.001, epochs=1000)
+
+Pr: 0.022827
+Re: 0.370301
+F1: 0.043004
+Ac: 0.788616
+AUC: 0.455970
+AP: 0.012715
+Pr: 0.000548
+Re: 0.007519
+F1: 0.001021
+Ac: 0.811350
+AUC: 0.667832
+AP: 0.019256

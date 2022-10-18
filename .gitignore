@@ -1,6 +1,7 @@
 __pycache__/
 *.so
 *.pkl
+*.pt
 log.txt
 preprocessing/database/*
 test.py

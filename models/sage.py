@@ -5,6 +5,8 @@ from torch_geometric.nn import SAGEConv
 class GraphSAGE(nn.Module):
     def __init__(self, in_dim, hidden, out, layers, samples=64, pool='max', device=torch.device('cpu')):
         super().__init__()
+        self.args = (in_dim, hidden, out, layers)
+        self.kwargs = dict(samples=samples, pool=pool, device=device)
 
         self.layers = nn.ModuleList(
             [nn.Sequential(
@@ -18,8 +20,7 @@ class GraphSAGE(nn.Module):
         )
         self.proj_out = nn.Sequential(
             nn.Dropout(), 
-            nn.Linear(hidden, out),
-            nn.Softmax(-1)
+            nn.Linear(hidden, out, device=device)
         )
 
         self.device = device 
@@ -46,7 +47,7 @@ class GraphSAGE(nn.Module):
             if d.size(0) == 0:
                 continue 
 
-            sample = torch.randint(0,d.size(0), self.samples)
+            sample = torch.randint(d.size(0), (self.samples,))
             dst_idx.append(d[sample])
             non_leafs.append(i)
 
@@ -67,23 +68,23 @@ class GraphSAGE(nn.Module):
         )
 
         all_neigh = torch.zeros(
-            (batch.size(0), self.sample, neigh_x.size(-1)),
+            (batch.size(0), self.samples, neigh_x.size(-1)),
             device=self.device
         )
         all_neigh[non_leafs] = neigh_x
         all_feats = torch.cat([
-            src_x.repeat(1,self.sample,1),
+            src_x.unsqueeze(1).repeat(1,self.samples,1),
             all_neigh
         ], dim=-1)
 
         # Finally, pass to linear layer
-        val = self.layers[layer](all_feats)
+        val = self.layers[layer-1](all_feats)
         
         # For now, just maxpool
         out = val.max(dim=1).values
 
         # Final layer, project to embedding dim
-        if layer == self.layers:
+        if layer == self.n_layers:
             return self.proj_out(out)
         
         # Otherwise

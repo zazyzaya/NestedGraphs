@@ -116,6 +116,14 @@ class UnfilteredGraph(Dataset):
         st = self.ptr[idx]; end = self.ptr[idx+1]
         return self.idx[st:end]
 
+    def to(self, device):
+        self.x = self.x.to(device)
+        self.ntype = self.ntype.to(device)
+        self.ptr = self.ptr.to(device)
+        self.idx = self.idx.to(device)
+
+        return self 
+
 
 def parse_line(line):
     obj = line['object']
