@@ -22,7 +22,7 @@ PROCS = NTYPES['PROCESS']
 DEVICE = 3
 HYPERPARAMS = SimpleNamespace(
     hidden=128, layers=2, 
-    samples=128, minibatch=25, batch_size=2048, 
+    samples=128, minibatch=25, batch_size=15000, 
     lr=0.001, epochs=1000
 )
 
@@ -136,13 +136,17 @@ def train(hp):
         if e % 10 == 9:
             stats = test(model)
             with open('tt_log.txt', 'a') as f:
+                f.write('[%d] Loss: %f\n' % (e+1,loss.item()))
                 for k,v in stats.items():
                     f.write('%s: %f\n' % (k,v))
+                f.write('\n')
 
         torch.save(
             (model.state_dict(), model.args, model.kwargs), 
             'saved_models/sage.pt'
         )
+    
+    return model
 
 
 if __name__ == '__main__':
