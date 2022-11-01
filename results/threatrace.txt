@@ -1,0 +1,13 @@
+(23 models)
+HYPERPARAMS = SimpleNamespace(
+    hidden=32, layers=2, pool='mean',
+    samples=128, batch_size=5000, 
+    lr=0.001, epochs=500, tr_graphs=50
+)
+
+[[36586  2034]
+ [  531     1]]
+Pr 0.0004914004914004914
+Re 0.0018796992481203006
+F1 0.0007791195948578107
+Ac 0.9344861054352268

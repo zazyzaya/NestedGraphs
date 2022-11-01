@@ -23,7 +23,7 @@ DEVICE = 3
 HYPERPARAMS = SimpleNamespace(
     hidden=32, layers=2, pool='mean',
     samples=128, batch_size=5000, 
-    lr=0.001, epochs=500
+    lr=0.001, epochs=500, tr_graphs=200
 )
 
 ce_loss = CrossEntropyLoss()
@@ -208,17 +208,17 @@ def test():
 
     return stats 
 
-def small_test():
+def train_all(hp):
     files = glob.glob(HOME+'benign/*.pkl')
     graphs = [int(f.split('/')[-1].split('_')[0]) for f in files]
 
-    to_train = {k:None for k in graphs[:50]}
+    to_train = {k:None for k in graphs[:hp.tr_graphs]}
     models = []
     
     i=1
     while len(to_train):
         print("(%d)" % i)
-        model = train_one(HYPERPARAMS, to_train)
+        model = train_one(hp, to_train)
         to_train = evaluate_one(model, to_train)
         models.append(model.state_dict())
         i += 1
@@ -229,4 +229,5 @@ def small_test():
         )
 
 if __name__ == '__main__':
-    small_test()
+    train_all(HYPERPARAMS)
+    test()

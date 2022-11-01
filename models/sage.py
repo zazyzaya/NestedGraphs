@@ -29,6 +29,7 @@ class GraphSAGE(nn.Module):
             self.aggr = aggr.MeanAggregation()
 
         self.device = device 
+        self.hidden = hidden 
         self.n_layers = layers
         self.samples = samples
 
@@ -56,17 +57,22 @@ class GraphSAGE(nn.Module):
             dst_idx.append(d)
             pool_idx += [i]*d.size(0)
 
-        dst_idx = torch.cat(dst_idx)
-        pool_idx = torch.tensor(pool_idx, device=self.device)
-        
-        # Avoid redundant calculation 
-        n_batch, n_idx = dst_idx.unique(return_inverse=True)
-        neigh_x = self.forward(
-            g, n_batch, layer=layer-1, 
-        )[n_idx]
+        if len(dst_idx):
+            dst_idx = torch.cat(dst_idx)
+            pool_idx = torch.tensor(pool_idx, device=self.device)
+            
+            # Avoid redundant calculation 
+            n_batch, n_idx = dst_idx.unique(return_inverse=True)
+            neigh_x = self.forward(
+                g, n_batch, layer=layer-1, 
+            )[n_idx]
 
-        # Aggregate neighbors
-        neigh_x = self.aggr(neigh_x, pool_idx, dim_size=batch.size(0))
+            # Aggregate neighbors
+            neigh_x = self.aggr(neigh_x, pool_idx, dim_size=batch.size(0))
+
+        else:
+            dim = self.layers[layer-1][1].in_features - src_x.size(1)
+            neigh_x = torch.zeros((src_x.size(0), dim), device=self.device)
 
         all_feats = torch.cat([
             src_x,
